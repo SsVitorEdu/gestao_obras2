@@ -1,5 +1,5 @@
 <?php
-// DASHBOARD FORNECEDORES (BARRAS VERTICAIS + VALORES R$)
+// DASHBOARD FORNECEDORES (FILTROS COMPLETOS + GRÁFICOS VERTICAIS R$)
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 set_time_limit(300);
@@ -127,7 +127,7 @@ $json_resp_val = json_encode(array_column($dados_resp, 'total'));
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
             <h3 class="text-dark fw-bold m-0"><i class="bi bi-graph-up-arrow text-primary"></i> ANÁLISE DE FORNECEDORES</h3>
-            <span class="text-muted small">Visão Financeira Completa (Vertical)</span>
+            <span class="text-muted small">Visão Financeira Completa</span>
         </div>
         <div>
             <button onclick="window.print()" class="btn btn-outline-dark fw-bold me-2"><i class="bi bi-printer"></i> IMPRIMIR</button>
@@ -137,17 +137,25 @@ $json_resp_val = json_encode(array_column($dados_resp, 'total'));
 
     <div class="card shadow-sm mb-4 border-primary">
         <div class="card-body py-3">
-            <form method="GET" class="row g-3 align-items-end">
+            <form method="GET" class="row g-2 align-items-end">
                 <input type="hidden" name="page" value="dashboard_graficos">
                 
                 <div class="col-md-2"><label class="fw-bold small text-muted">Início</label><input type="date" name="dt_ini" class="form-control" value="<?php echo $dt_ini; ?>"></div>
                 <div class="col-md-2"><label class="fw-bold small text-muted">Fim</label><input type="date" name="dt_fim" class="form-control" value="<?php echo $dt_fim; ?>"></div>
                 
                 <div class="col-md-4">
+                    <label class="fw-bold small text-muted">Empresa</label>
+                    <select name="filtro_emp" class="form-select">
+                        <option value="">-- Todas --</option>
+                        <?php foreach($emp_list as $e): ?><option value="<?php echo $e['id']; ?>" <?php echo ($filtro_emp==$e['id'])?'selected':''; ?>><?php echo substr($e['nome'],0,35); ?></option><?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div class="col-md-4">
                     <label class="fw-bold small text-muted">Obra</label>
                     <select name="filtro_obra" class="form-select">
                         <option value="">-- Todas --</option>
-                        <?php foreach($obras_list as $o): ?><option value="<?php echo $o['id']; ?>" <?php echo ($filtro_obra==$o['id'])?'selected':''; ?>><?php echo substr($o['nome'],0,30); ?></option><?php endforeach; ?>
+                        <?php foreach($obras_list as $o): ?><option value="<?php echo $o['id']; ?>" <?php echo ($filtro_obra==$o['id'])?'selected':''; ?>><?php echo substr($o['nome'],0,35); ?></option><?php endforeach; ?>
                     </select>
                 </div>
                 
@@ -155,12 +163,20 @@ $json_resp_val = json_encode(array_column($dados_resp, 'total'));
                     <label class="fw-bold small text-muted">Fornecedor</label>
                     <select name="filtro_forn" class="form-select">
                         <option value="">-- Todos --</option>
-                        <?php foreach($forn_list as $f): ?><option value="<?php echo $f['id']; ?>" <?php echo ($filtro_forn==$f['id'])?'selected':''; ?>><?php echo substr($f['nome'],0,25); ?></option><?php endforeach; ?>
+                        <?php foreach($forn_list as $f): ?><option value="<?php echo $f['id']; ?>" <?php echo ($filtro_forn==$f['id'])?'selected':''; ?>><?php echo substr($f['nome'],0,30); ?></option><?php endforeach; ?>
                     </select>
                 </div>
 
-                <div class="col-md-12 text-end">
-                    <button class="btn btn-primary fw-bold px-5"><i class="bi bi-funnel"></i> ATUALIZAR DADOS</button>
+                <div class="col-md-3">
+                    <label class="fw-bold small text-muted">Forma de Pagamento</label>
+                    <select name="filtro_pag" class="form-select">
+                        <option value="">-- Todas --</option>
+                        <?php foreach($pag_list as $p): ?><option value="<?php echo $p['forma_pagamento']; ?>" <?php echo ($filtro_pag==$p['forma_pagamento'])?'selected':''; ?>><?php echo $p['forma_pagamento']; ?></option><?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div class="col-md-5">
+                    <button class="btn btn-primary fw-bold w-100"><i class="bi bi-funnel"></i> FILTRAR DADOS</button>
                 </div>
             </form>
         </div>
@@ -170,7 +186,7 @@ $json_resp_val = json_encode(array_column($dados_resp, 'total'));
         <div class="col-12">
             <div class="card shadow border-0">
                 <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
-                    <h5 class="fw-bold text-dark m-0 text-center">RESUMO FINANCEIRO (PEDIDO vs EXECUTADO vs SALDO)</h5>
+                    <h5 class="fw-bold text-dark m-0 text-center">RESUMO FINANCEIRO</h5>
                     <div class="d-flex gap-1">
                         <button class="btn btn-light btn-sm border" onclick="expandirGrafico('chartFin', 'RESUMO FINANCEIRO')" title="Expandir"><i class="bi bi-arrows-fullscreen"></i></button>
                         <button class="btn btn-light btn-sm border" onclick="$('#bodyFin').slideToggle()" title="Ocultar"><i class="bi bi-eye-slash"></i></button>
@@ -189,7 +205,7 @@ $json_resp_val = json_encode(array_column($dados_resp, 'total'));
         <div class="col-md-6 mb-4">
             <div class="card shadow h-100 border-0">
                 <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
-                    <h5 class="fw-bold text-dark m-0">FORMA DE PAGAMENTO (TOTAL R$)</h5>
+                    <h5 class="fw-bold text-dark m-0">FORMA DE PAGAMENTO</h5>
                     <div class="d-flex gap-1">
                         <button class="btn btn-light btn-sm border" onclick="expandirGrafico('chartPag', 'FORMA DE PAGAMENTO')" title="Expandir"><i class="bi bi-arrows-fullscreen"></i></button>
                         <button class="btn btn-light btn-sm border" onclick="$('#bodyPag').slideToggle()"><i class="bi bi-eye-slash"></i></button>
@@ -259,7 +275,7 @@ $json_resp_val = json_encode(array_column($dados_resp, 'total'));
 <script>
 // FORMATADORES
 const fmtBRL = (val) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(val);
-const fmtCompact = (val) => new Intl.NumberFormat('pt-BR', { notation: "compact", compactDisplay: "short" }).format(val);
+const fmtCompact = (val) => new Intl.NumberFormat('pt-BR', { notation: "compact", compactDisplay: "short", maximumFractionDigits: 1 }).format(val);
 
 Chart.register(ChartDataLabels);
 Chart.defaults.font.family = "'Segoe UI', sans-serif";
@@ -293,13 +309,13 @@ charts['chartFin'] = new Chart(document.getElementById('chartFin'), {
         plugins: {
             legend: { display: false },
             tooltip: { callbacks: { label: (c) => fmtBRL(c.raw) } },
-            datalabels: { ...verticalLabels, formatter: (val) => fmtBRL(val) } // Valor completo
+            datalabels: { ...verticalLabels, formatter: (val) => fmtBRL(val) }
         },
         scales: { y: { beginAtZero: true, grid: { color: '#f0f0f0' } } }
     }
 });
 
-// --- G2: PAGAMENTOS (VERTICAL) ---
+// --- G2: PAGAMENTOS ---
 charts['chartPag'] = new Chart(document.getElementById('chartPag'), {
     type: 'bar',
     data: {
@@ -323,7 +339,7 @@ charts['chartPag'] = new Chart(document.getElementById('chartPag'), {
     }
 });
 
-// --- G3: FORNECEDORES (VERTICAL) ---
+// --- G3: FORNECEDORES ---
 charts['chartForn'] = new Chart(document.getElementById('chartForn'), {
     type: 'bar',
     data: {
@@ -347,7 +363,7 @@ charts['chartForn'] = new Chart(document.getElementById('chartForn'), {
     }
 });
 
-// --- G4: CONTRATOS (VERTICAL) ---
+// --- G4: CONTRATOS ---
 charts['chartResp'] = new Chart(document.getElementById('chartResp'), {
     type: 'bar',
     data: {
@@ -365,13 +381,13 @@ charts['chartResp'] = new Chart(document.getElementById('chartResp'), {
         plugins: {
             legend: { display: false },
             tooltip: { callbacks: { label: (c) => fmtBRL(c.raw) } },
-            datalabels: verticalLabels
+            datalabels: { ...verticalLabels, align: 'top' }
         },
-        scales: { y: { beginAtZero: true } }
+        scales: { y: { grid: { borderDash: [5, 5] } }, x: { grid: { display: false } } }
     }
 });
 
-// --- FUNÇÃO MÁGICA: EXPANDIR GRÁFICO ---
+// --- POP-UP ---
 let modalChartInstance = null;
 
 function expandirGrafico(chartId, titulo) {
