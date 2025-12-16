@@ -1,5 +1,5 @@
 <?php
-// DETALHE DA OBRA (COM EDIÇÃO, EXCLUSÃO E NOVO PEDIDO)
+// DETALHE DA OBRA (COM CONTADOR DE OFs NO CABEÇALHO)
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 
@@ -57,12 +57,20 @@ $sql_itens = "SELECT p.*,
 $itens = $pdo->prepare($sql_itens);
 $itens->execute($params);
 $lista = $itens->fetchAll(PDO::FETCH_ASSOC);
+
+// CÁLCULO DOS TOTAIS
 $total_bruto = 0;
 $total_pago = 0;
+$total_ofs_unicas = []; // Array para contar OFs únicas
+
 foreach($lista as $l) {
     $total_bruto += $l['valor_bruto_pedido'];
     $total_pago  += $l['valor_total_rec'];
+    if(!empty($l['numero_of'])) {
+        $total_ofs_unicas[$l['numero_of']] = true;
+    }
 }
+$qtd_ofs = count($total_ofs_unicas); // Conta quantas chaves únicas existem
 ?>
 
 <link rel="stylesheet" href="https://cdn.datatables.net/1.13.4/css/dataTables.bootstrap5.min.css">
@@ -141,8 +149,19 @@ foreach($lista as $l) {
                 </div>
 
                 <div class="col-md-12 d-flex gap-3 align-items-center justify-content-end mt-2">
-                    <div class="bg-white border px-3 py-1 rounded shadow-sm"><small class="text-muted d-block" style="font-size: 10px;">TOTAL PEDIDO</small><span class="text-dark fw-bold fs-6">R$ <?php echo number_format($total_bruto, 2, ',', '.'); ?></span></div>
-                    <div class="bg-white border-bottom border-4 border-success px-3 py-1 rounded shadow-sm"><small class="text-muted d-block" style="font-size: 10px;">TOTAL EXECUTADO</small><span class="text-success fw-bold fs-6">R$ <?php echo number_format($total_pago, 2, ',', '.'); ?></span></div>
+                    <div class="bg-white border-bottom border-4 border-primary px-3 py-1 rounded shadow-sm">
+                        <small class="text-muted d-block" style="font-size: 10px;">QTD OFs</small>
+                        <span class="text-primary fw-bold fs-6"><?php echo $qtd_ofs; ?></span>
+                    </div>
+
+                    <div class="bg-white border px-3 py-1 rounded shadow-sm">
+                        <small class="text-muted d-block" style="font-size: 10px;">TOTAL PEDIDO</small>
+                        <span class="text-dark fw-bold fs-6">R$ <?php echo number_format($total_bruto, 2, ',', '.'); ?></span>
+                    </div>
+                    <div class="bg-white border-bottom border-4 border-success px-3 py-1 rounded shadow-sm">
+                        <small class="text-muted d-block" style="font-size: 10px;">TOTAL EXECUTADO</small>
+                        <span class="text-success fw-bold fs-6">R$ <?php echo number_format($total_pago, 2, ',', '.'); ?></span>
+                    </div>
                 </div>
             </form>
 

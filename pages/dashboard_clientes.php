@@ -1,5 +1,5 @@
 <?php
-// DASHBOARD IMOBILIÁRIO (BARRAS LADO A LADO + FILTRO VISUAL)
+// DASHBOARD IMOBILIÁRIO - V10 (3 BARRAS LADO A LADO)
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 set_time_limit(300);
@@ -28,7 +28,7 @@ if (!empty($filtro_emp)) {
     $params[] = $filtro_emp;
 }
 
-// Filtro de Status (Afeta o WHERE do banco)
+// Filtro de Status
 $filtro_status = $_GET['filtro_status'] ?? '';
 if ($filtro_status == 'pago') {
     $where .= " AND p.valor_pago > 0";
@@ -58,12 +58,13 @@ $total_a_receber = $kpi['total_a_receber'] ?? 0;
 $total_geral = $total_recebido + $total_vencido + $total_a_receber;
 
 
-// GRÁFICO 1: EVOLUÇÃO MENSAL
+// GRÁFICO 1: FLUXO MENSAL (3 VALORES)
 $sql_mes = "SELECT 
                 DATE_FORMAT(p.data_vencimento, '%Y-%m') as mes_ref,
                 DATE_FORMAT(p.data_vencimento, '%m/%Y') as mes_label,
+                SUM(p.valor_parcela) as total_geral,
                 SUM(p.valor_pago) as recebido,
-                SUM(CASE WHEN p.valor_pago < p.valor_parcela THEN (p.valor_parcela - p.valor_pago) ELSE 0 END) as pendente
+                SUM(CASE WHEN p.valor_pago < p.valor_parcela THEN (p.valor_parcela - p.valor_pago) ELSE 0 END) as a_receber
             FROM parcelas_imob p
             JOIN vendas_imob v ON p.venda_id = v.id
             $where
@@ -93,17 +94,20 @@ $dados_emp = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // Lista para filtro
 $lista_empresas = $pdo->query("SELECT DISTINCT nome_empresa FROM vendas_imob ORDER BY nome_empresa")->fetchAll();
 
-// JSON Charts
+// JSON Charts - GRÁFICO UNIFICADO
 $json_mes_lbl = json_encode(array_column($dados_mes, 'mes_label'));
+$json_mes_tot = json_encode(array_column($dados_mes, 'total_geral'));
 $json_mes_rec = json_encode(array_column($dados_mes, 'recebido'));
-$json_mes_pen = json_encode(array_column($dados_mes, 'pendente'));
+$json_mes_are = json_encode(array_column($dados_mes, 'a_receber'));
 
+// JSON Charts - EMPRESA
 $json_emp_lbl = json_encode(array_column($dados_emp, 'nome_empresa'));
 $json_emp_rec = json_encode(array_column($dados_emp, 'recebido'));
 $json_emp_ven = json_encode(array_column($dados_emp, 'vencido'));
 $json_emp_fut = json_encode(array_column($dados_emp, 'a_receber'));
 ?>
 
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.0.0"></script>
 
@@ -198,137 +202,230 @@ $json_emp_fut = json_encode(array_column($dados_emp, 'a_receber'));
         </div>
     </div>
 
-    <div class="row g-4">
+    <div class="row mb-4">
         <div class="col-12">
-            <div class="card shadow border-0">
-                <div class="card-header bg-white py-3">
-                    <h5 class="fw-bold text-dark m-0"><i class="bi bi-bar-chart-line"></i> FLUXO MENSAL</h5>
+            <div class="card shadow border-0 h-100">
+                <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                    <h5 class="fw-bold text-dark m-0">
+                        <i class="bi bi-bar-chart-fill"></i> FLUXO DE CAIXA MENSAL
+                        <span id="info_chartFluxo" class="badge bg-light text-secondary border ms-2 fw-normal" style="font-size: 0.8rem;"></span>
+                    </h5>
+                    <div class="d-flex gap-1">
+                        <button class="btn btn-light btn-sm border" onclick="expandirGrafico_Imob('chartFluxo', 'FLUXO DE CAIXA MENSAL')" title="Expandir"><i class="bi bi-arrows-fullscreen"></i></button>
+                        <button class="btn btn-light btn-sm border" onclick="$('#bodyFluxo').slideToggle()" title="Ocultar"><i class="bi bi-eye-slash"></i></button>
+                    </div>
                 </div>
-                <div class="card-body">
+                <div class="card-body" id="bodyFluxo">
                     <div style="height: 400px;"><canvas id="chartFluxo"></canvas></div>
                 </div>
             </div>
         </div>
+    </div>
 
+    <div class="row">
         <div class="col-12">
-            <div class="card shadow border-0">
-                <div class="card-header bg-white py-3">
-                    <h5 class="fw-bold text-dark m-0"><i class="bi bi-building"></i> POR EMPRESA</h5>
+            <div class="card shadow border-0 h-100">
+                <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                    <h5 class="fw-bold text-dark m-0">
+                        <i class="bi bi-building"></i> POR EMPRESA
+                        <span id="info_chartEmpresa" class="badge bg-light text-secondary border ms-2 fw-normal" style="font-size: 0.8rem;"></span>
+                    </h5>
+                    <div class="d-flex gap-1">
+                        <button class="btn btn-light btn-sm border" onclick="expandirGrafico_Imob('chartEmpresa', 'POR EMPRESA')" title="Expandir"><i class="bi bi-arrows-fullscreen"></i></button>
+                        <button class="btn btn-light btn-sm border" onclick="$('#bodyEmpresa').slideToggle()" title="Ocultar"><i class="bi bi-eye-slash"></i></button>
+                    </div>
                 </div>
-                <div class="card-body">
-                    <div style="height: 500px;"><canvas id="chartEmpresa"></canvas></div>
+                <div class="card-body" id="bodyEmpresa">
+                    <div style="height: 400px;"><canvas id="chartEmpresa"></canvas></div>
                 </div>
             </div>
         </div>
     </div>
 </div>
 
+<div class="modal fade" id="modalGrafico_Imob" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-dark text-white py-2">
+                <h5 class="modal-title fw-bold" id="modalLabel_Imob">Visualização Expandida</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body bg-white" style="height: 80vh;">
+                <canvas id="modalCanvas_Imob"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
-const fmtBRL = (val) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(val);
-const fmtCompact = (val) => new Intl.NumberFormat('pt-BR', { notation: "compact", compactDisplay: "short", maximumFractionDigits: 1 }).format(val);
+{
+    const fmtBRL_Imob = (val) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', maximumFractionDigits: 0 }).format(val);
+    const fmtCompact_Imob = (val) => new Intl.NumberFormat('pt-BR', { notation: "compact", compactDisplay: "short", maximumFractionDigits: 1 }).format(val);
 
-// VARIÁVEIS PHP PARA JS
-const statusFiltro = "<?php echo $filtro_status; ?>";
+    const statusFiltro = "<?php echo $filtro_status; ?>";
 
-Chart.register(ChartDataLabels);
-Chart.defaults.font.family = "'Segoe UI', sans-serif";
-Chart.defaults.color = '#555';
+    try { Chart.register(ChartDataLabels); } catch(e){}
+    Chart.defaults.font.family = "'Segoe UI', sans-serif";
+    Chart.defaults.color = '#555';
 
-// 1. FLUXO MENSAL
-// Lógica de visualização: LADO A LADO (sem stack)
-new Chart(document.getElementById('chartFluxo'), {
-    type: 'bar',
-    data: {
-        labels: <?php echo $json_mes_lbl; ?>,
-        datasets: [
-            {
-                label: 'Recebido',
-                data: <?php echo $json_mes_rec; ?>,
-                backgroundColor: '#198754', // Verde
-                borderRadius: 4,
-                hidden: (statusFiltro === 'vencido' || statusFiltro === 'aberto'), // Esconde se filtrar só pendente
-                order: 1
+    // CONFIGURAÇÕES
+    const chartConfigs = {
+        'chartFluxo': {
+            type: 'bar',
+            data: {
+                labels: <?php echo $json_mes_lbl; ?>,
+                datasets: [
+                    {
+                        label: 'Total (Carteira)',
+                        data: <?php echo $json_mes_tot; ?>,
+                        backgroundColor: '#0d6efd',
+                        borderRadius: 4,
+                        barPercentage: 0.6,
+                        categoryPercentage: 0.8,
+                        order: 0
+                    },
+                    {
+                        label: 'Recebido',
+                        data: <?php echo $json_mes_rec; ?>,
+                        backgroundColor: '#198754', 
+                        borderRadius: 4,
+                        barPercentage: 0.6,
+                        categoryPercentage: 0.8,
+                        hidden: (statusFiltro === 'vencido' || statusFiltro === 'aberto'),
+                        order: 1
+                    },
+                    {
+                        label: 'A Receber',
+                        data: <?php echo $json_mes_are; ?>,
+                        backgroundColor: '#ffc107', 
+                        borderRadius: 4,
+                        barPercentage: 0.6,
+                        categoryPercentage: 0.8,
+                        hidden: (statusFiltro === 'pago'),
+                        order: 2
+                    }
+                ]
             },
-            {
-                label: 'Pendente',
-                data: <?php echo $json_mes_pen; ?>,
-                backgroundColor: '#6c757d', // Cinza Escuro (Melhor contraste)
-                borderRadius: 4,
-                hidden: (statusFiltro === 'pago'), // Esconde se filtrar só pago
-                order: 2
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    tooltip: { 
+                        callbacks: { label: (c) => c.dataset.label + ': ' + fmtBRL_Imob(c.raw) },
+                        backgroundColor: 'rgba(0,0,0,0.8)', padding: 10
+                    },
+                    datalabels: {
+                        display: (ctx) => ctx.dataset.data[ctx.dataIndex] > 0,
+                        formatter: (val) => fmtCompact_Imob(val),
+                        font: { weight: 'bold', size: 10 },
+                        anchor: 'end', align: 'top', offset: -4,
+                        rotation: -45 // Inclina o texto se ficar muito apertado
+                    },
+                    legend: { position: 'top', align: 'center' }
+                },
+                scales: {
+                    x: { grid: { display: false } },
+                    y: { beginAtZero: true, grid: { borderDash: [5, 5] }, stacked: false } // IMPORTANTE: FALSE PARA FICAR LADO A LADO
+                }
             }
-        ]
-    },
-    options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-            tooltip: { 
-                callbacks: { label: (c) => c.dataset.label + ': ' + fmtBRL(c.raw) },
-                backgroundColor: 'rgba(0,0,0,0.8)',
-                padding: 10
-            },
-            datalabels: {
-                display: (ctx) => ctx.dataset.data[ctx.dataIndex] > 0,
-                formatter: (val) => fmtCompact(val),
-                font: { weight: 'bold' },
-                anchor: 'end',
-                align: 'top',
-                offset: -4
-            },
-            legend: { position: 'top', align: 'end' }
         },
-        scales: {
-            x: { grid: { display: false } },
-            y: { beginAtZero: true, grid: { borderDash: [5, 5] } }
+        'chartEmpresa': {
+            type: 'bar',
+            data: {
+                labels: <?php echo $json_emp_lbl; ?>,
+                datasets: [
+                    { 
+                        label: 'Recebido', 
+                        data: <?php echo $json_emp_rec; ?>, 
+                        backgroundColor: '#198754', 
+                        barPercentage: 0.7,
+                        hidden: (statusFiltro === 'vencido' || statusFiltro === 'aberto') 
+                    },
+                    { 
+                        label: 'Futuro', 
+                        data: <?php echo $json_emp_fut; ?>, 
+                        backgroundColor: '#0d6efd', 
+                        barPercentage: 0.7,
+                        hidden: (statusFiltro === 'pago' || statusFiltro === 'vencido') 
+                    },
+                    { 
+                        label: 'Vencido', 
+                        data: <?php echo $json_emp_ven; ?>, 
+                        backgroundColor: '#dc3545', 
+                        barPercentage: 0.7,
+                        hidden: (statusFiltro === 'pago' || statusFiltro === 'aberto') 
+                    }
+                ]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    tooltip: { callbacks: { label: (c) => c.dataset.label + ': ' + fmtBRL_Imob(c.raw) } },
+                    datalabels: {
+                        anchor: 'end', align: 'end',
+                        formatter: (val) => val > 0 ? fmtCompact_Imob(val) : '',
+                        font: { size: 10, weight: 'bold' }
+                    }
+                },
+                scales: { x: { grid: { borderDash: [2, 2] } } }
+            }
+        }
+    };
+
+    // RENDERIZA GRÁFICOS
+    const chartInstances_Imob = {};
+    for (const [id, config] of Object.entries(chartConfigs)) {
+        const ctx = document.getElementById(id);
+        if (ctx) {
+            chartInstances_Imob[id] = new Chart(ctx, config);
+            
+            // LÓGICA DO TOTAL (Crachá)
+            let totalVal = 0;
+            // No fluxo unificado, queremos mostrar o TOTAL DA CARTEIRA no crachá
+            if(id === 'chartFluxo') {
+                // Dataset 0 é o "Total Geral"
+                config.data.datasets[0].data.forEach(val => totalVal += Number(val));
+            } else {
+                // Empresa: soma tudo
+                config.data.datasets.forEach(ds => {
+                    if(!ds.hidden) ds.data.forEach(val => totalVal += Number(val));
+                });
+            }
+            
+            const badgeEl = document.getElementById('info_' + id);
+            if(badgeEl) badgeEl.innerText = fmtCompact_Imob(totalVal);
         }
     }
-});
 
-// 2. EMPRESA
-new Chart(document.getElementById('chartEmpresa'), {
-    type: 'bar',
-    data: {
-        labels: <?php echo $json_emp_lbl; ?>,
-        datasets: [
-            { 
-                label: 'Recebido', 
-                data: <?php echo $json_emp_rec; ?>, 
-                backgroundColor: '#198754', 
-                barPercentage: 0.7,
-                hidden: (statusFiltro === 'vencido' || statusFiltro === 'aberto') 
-            },
-            { 
-                label: 'Futuro', 
-                data: <?php echo $json_emp_fut; ?>, 
-                backgroundColor: '#0d6efd', 
-                barPercentage: 0.7,
-                hidden: (statusFiltro === 'pago' || statusFiltro === 'vencido') 
-            },
-            { 
-                label: 'Vencido', 
-                data: <?php echo $json_emp_ven; ?>, 
-                backgroundColor: '#dc3545', 
-                barPercentage: 0.7,
-                hidden: (statusFiltro === 'pago' || statusFiltro === 'aberto') 
+    // EXPANDIR
+    let modalChartInstance_Imob = null;
+    window.expandirGrafico_Imob = function(chartId, titulo) {
+        const configOriginal = chartConfigs[chartId];
+        if (!configOriginal) return;
+
+        document.getElementById('modalLabel_Imob').innerText = titulo;
+        const modalCanvas = document.getElementById('modalCanvas_Imob');
+
+        if (modalChartInstance_Imob) modalChartInstance_Imob.destroy();
+
+        let chartHeight = document.getElementById(chartId).parentElement.offsetHeight;
+        modalCanvas.style.height = (chartHeight > window.innerHeight * 0.8) ? chartHeight + "px" : "80vh";
+
+        modalChartInstance_Imob = new Chart(modalCanvas, {
+            type: configOriginal.type,
+            data: configOriginal.data,
+            options: {
+                ...configOriginal.options,
+                maintainAspectRatio: false,
+                plugins: { ...configOriginal.options.plugins, legend: { display: true, position: 'top' } }
             }
-        ]
-    },
-    options: {
-        indexAxis: 'y',
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-            tooltip: { callbacks: { label: (c) => c.dataset.label + ': ' + fmtBRL(c.raw) } },
-            datalabels: {
-                anchor: 'end', align: 'end',
-                formatter: (val) => val > 0 ? fmtCompact(val) : '',
-                font: { size: 11, weight: 'bold' }
-            }
-        },
-        scales: { x: { grid: { borderDash: [2, 2] } } }
-    }
-});
+        });
+
+        new bootstrap.Modal(document.getElementById('modalGrafico_Imob')).show();
+    };
+}
 </script>
 
 <style>

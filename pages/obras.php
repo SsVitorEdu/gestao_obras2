@@ -1,5 +1,5 @@
 <?php
-// GESTÃO DE OBRAS (COM IMPORTADOR MESTRE VINCULADO)
+// GESTÃO DE OBRAS (CORRIGIDO: NOME DA COLUNA CODIGO)
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 
@@ -23,73 +23,67 @@ if (!empty($dt_fim)) { $where_pedidos .= " AND p.data_pedido <= ?"; $params[] = 
 if (!empty($filtro_forn)) { $where_pedidos .= " AND p.fornecedor_id = ?"; $params[] = $filtro_forn; }
 if (!empty($filtro_pag)) { $where_pedidos .= " AND p.forma_pagamento = ?"; $params[] = $filtro_pag; }
 
-// Definição da Ordem
-switch ($filtro_ordem) {
-    case 'cod_asc':    $sql_order = "o.codigo ASC"; break;
-    case 'nome_asc':   $sql_order = "o.nome ASC"; break;
-    case 'valor_desc': $sql_order = "total_gasto DESC"; break;
-    case 'progresso':  $sql_order = "(itens_concluidos / NULLIF(total_itens, 0)) DESC"; break;
-    default:           $sql_order = "o.codigo DESC";
-}
-
-// Query Principal
+// SQL PRINCIPAL: Agrupa pedidos por Obra
+// CORREÇÃO: Trocado o.cod_obra por o.codigo
 $sql = "SELECT 
             o.id, 
-            o.codigo, 
             o.nome, 
-            COALESCE(e.nome, 'Sem Empresa') as nome_empresa, 
+            o.codigo, 
             
-            -- Contagens filtradas
-            COUNT(p.id) as total_itens,
-            SUM(CASE WHEN p.qtd_recebida >= p.qtd_pedida THEN 1 ELSE 0 END) as itens_concluidos,
-            SUM(p.valor_bruto_pedido) as total_gasto
-
-        FROM obras o 
-        LEFT JOIN empresas e ON o.empresa_id = e.id
-        LEFT JOIN pedidos p ON p.obra_id = o.id 
-        $where_pedidos 
-        
+            -- Somas financeiras (Baseado nos filtros)
+            SUM(p.valor_bruto_pedido) as total_gasto,
+            SUM(p.valor_total_rec) as total_executado, 
+            
+            COUNT(DISTINCT p.numero_of) as qtd_pedidos,
+            MAX(p.data_pedido) as ultima_compra
+            
+        FROM obras o
+        LEFT JOIN pedidos p ON p.obra_id = o.id
+        $where_pedidos
         GROUP BY o.id
-        HAVING (total_itens > 0 OR '$dt_ini' = '') 
-        ORDER BY $sql_order";
+        HAVING total_gasto > 0 "; 
+
+// Ordenação
+switch ($filtro_ordem) {
+    case 'valor_desc': $sql .= "ORDER BY total_gasto DESC"; break;
+    case 'valor_asc':  $sql .= "ORDER BY total_gasto ASC"; break;
+    case 'nome_asc':   $sql .= "ORDER BY o.nome ASC"; break;
+    default:           $sql .= "ORDER BY o.codigo DESC"; break; // Corrigido aqui também
+}
 
 try {
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
     $obras = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
-    echo "<div class='alert alert-danger'>Erro: " . $e->getMessage() . "</div>";
+    echo "<div class='alert alert-danger'>Erro SQL: " . $e->getMessage() . "</div>";
     exit;
 }
 
-// --- 4. CÁLCULO DOS KPIs ---
-$total_obras_listadas = count($obras);
-$kpi_investido = 0;
-$kpi_itens = 0;
-$kpi_concluidos = 0;
+// --- 4. CÁLCULO DOS TOTAIS GERAIS (KPIs) ---
+$kpi_total_gasto = 0;
+$kpi_total_executado = 0; 
+$kpi_total_ofs = 0;
 
-foreach($obras as $o) {
-    $kpi_investido += $o['total_gasto'];
-    $kpi_itens += $o['total_itens'];
-    $kpi_concluidos += $o['itens_concluidos'];
+foreach($obras as $obra) {
+    $kpi_total_gasto += $obra['total_gasto'];
+    $kpi_total_executado += $obra['total_executado']; 
+    $kpi_total_ofs += $obra['qtd_pedidos'];
 }
-$kpi_progresso = ($kpi_itens > 0) ? round(($kpi_concluidos / $kpi_itens) * 100) : 0;
 ?>
 
 <div class="d-flex justify-content-between align-items-center mb-3">
     <div>
-        <h4 class="m-0 text-dark fw-bold"><i class="bi bi-buildings text-primary"></i> Gestão de Obras</h4>
-        <small class="text-muted">Visão Geral e Controle de Custos</small>
+        <h4 class="m-0 text-dark fw-bold"><i class="bi bi-buildings-fill text-primary"></i> Gestão de Obras</h4>
+        <small class="text-muted">Acompanhamento de custos e pedidos por obra</small>
     </div>
     <div class="d-flex gap-2">
         <a href="index.php?page=dashboard_obras" class="btn btn-warning btn-sm shadow-sm fw-bold">
             <i class="bi bi-pie-chart-fill"></i> Dashboard
         </a>
-        
         <a href="index.php?page=importar_mestre_xlsx" class="btn btn-dark btn-sm shadow-sm">
-            <i class="bi bi-file-earmark-spreadsheet-fill"></i> Importar Mestre
+            <i class="bi bi-cloud-arrow-up"></i> Importar Mestre
         </a>
-        
         <a href="index.php?page=configuracoes&tab=obras" class="btn btn-outline-primary btn-sm shadow-sm">
             <i class="bi bi-plus-lg"></i> Nova Obra
         </a>
@@ -109,7 +103,7 @@ $kpi_progresso = ($kpi_itens > 0) ? round(($kpi_concluidos / $kpi_itens) * 100) 
                 <label class="small fw-bold text-muted">Fim</label>
                 <input type="date" name="dt_fim" class="form-control form-control-sm" value="<?php echo $dt_fim; ?>">
             </div>
-
+            
             <div class="col-md-3">
                 <label class="small fw-bold text-muted">Fornecedor</label>
                 <select name="filtro_forn" class="form-select form-select-sm">
@@ -122,7 +116,7 @@ $kpi_progresso = ($kpi_itens > 0) ? round(($kpi_concluidos / $kpi_itens) * 100) 
                 </select>
             </div>
 
-            <div class="col-md-2">
+            <div class="col-md-3">
                 <label class="small fw-bold text-muted">Pagamento</label>
                 <select name="filtro_pag" class="form-select form-select-sm">
                     <option value="">-- Todos --</option>
@@ -135,115 +129,107 @@ $kpi_progresso = ($kpi_itens > 0) ? round(($kpi_concluidos / $kpi_itens) * 100) 
             </div>
 
             <div class="col-md-2">
-                <label class="small fw-bold text-muted">Ordenar Por</label>
-                <select name="ordem" class="form-select form-select-sm">
-                    <option value="cod_desc" <?php echo ($filtro_ordem=='cod_desc')?'selected':''; ?>>Mais Recentes</option>
-                    <option value="valor_desc" <?php echo ($filtro_ordem=='valor_desc')?'selected':''; ?>>💰 Maior Valor</option>
-                    <option value="progresso" <?php echo ($filtro_ordem=='progresso')?'selected':''; ?>>📊 Maior Progresso</option>
-                    <option value="nome_asc" <?php echo ($filtro_ordem=='nome_asc')?'selected':''; ?>>Alfabetica</option>
-                </select>
-            </div>
-
-            <div class="col-md-1">
-                <button class="btn btn-primary btn-sm w-100 fw-bold"><i class="bi bi-funnel"></i></button>
+                <button class="btn btn-primary btn-sm w-100 fw-bold px-3">FILTRAR</button>
             </div>
         </form>
     </div>
 </div>
 
 <div class="row mb-4 g-3">
-    <div class="col-md-3">
+    
+    <div class="col-md-4">
         <div class="card shadow-sm border-start border-5 border-success h-100">
-            <div class="card-body py-2">
-                <small class="text-uppercase fw-bold text-success" style="font-size: 0.7rem;">Total Investido (Filtro)</small>
-                <h4 class="fw-bold text-dark mt-1 mb-0">R$ <?php echo number_format($kpi_investido, 2, ',', '.'); ?></h4>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card shadow-sm border-start border-5 border-primary h-100">
-            <div class="card-body py-2">
-                <small class="text-uppercase fw-bold text-primary" style="font-size: 0.7rem;">Volume de Itens</small>
-                <h4 class="fw-bold text-dark mt-1 mb-0"><?php echo number_format($kpi_itens, 0, ',', '.'); ?></h4>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card shadow-sm border-start border-5 border-info h-100">
-            <div class="card-body py-2">
-                <small class="text-uppercase fw-bold text-info" style="font-size: 0.7rem;">Obras Listadas</small>
-                <h4 class="fw-bold text-dark mt-1 mb-0"><?php echo $total_obras_listadas; ?></h4>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card shadow-sm border-start border-5 border-warning h-100">
-            <div class="card-body py-2 d-flex justify-content-between align-items-center">
-                <div>
-                    <small class="text-uppercase fw-bold text-warning" style="font-size: 0.7rem;">Progresso Médio</small>
-                    <h4 class="fw-bold text-dark mt-1 mb-0"><?php echo $kpi_progresso; ?>%</h4>
+            <div class="card-body py-3">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <small class="text-uppercase fw-bold text-success" style="font-size: 0.7rem;">TOTAL EXECUTADO (REC)</small>
+                        <h4 class="fw-bold text-dark mt-1 mb-0">R$ <?php echo number_format($kpi_total_executado, 2, ',', '.'); ?></h4>
+                    </div>
+                    <div class="text-success opacity-25"><i class="bi bi-check-circle-fill fs-1"></i></div>
                 </div>
-                <div style="width: 35px; height: 35px; border-radius: 50%; background: conic-gradient(#ffc107 <?php echo $kpi_progresso; ?>%, #e9ecef 0);"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card shadow-sm border-start border-5 border-primary h-100">
+            <div class="card-body py-3">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <small class="text-uppercase fw-bold text-primary" style="font-size: 0.7rem;">VALOR TOTAL (PEDIDOS)</small>
+                        <h4 class="fw-bold text-dark mt-1 mb-0">R$ <?php echo number_format($kpi_total_gasto, 2, ',', '.'); ?></h4>
+                    </div>
+                    <div class="text-primary opacity-25"><i class="bi bi-cash-stack fs-1"></i></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card shadow-sm border-start border-5 border-warning h-100">
+            <div class="card-body py-3">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <small class="text-uppercase fw-bold text-warning" style="font-size: 0.7rem;">VOLUME (QTD OFs)</small>
+                        <h4 class="fw-bold text-dark mt-1 mb-0"><?php echo $kpi_total_ofs; ?></h4>
+                    </div>
+                    <div class="text-warning opacity-25"><i class="bi bi-file-earmark-text fs-1"></i></div>
+                </div>
             </div>
         </div>
     </div>
 </div>
 
-<div class="mb-3">
-    <input type="text" id="filtroInput" class="form-control form-control-lg" placeholder="🔍 Digite para localizar uma obra na tela...">
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div class="input-group" style="max-width: 300px;">
+        <span class="input-group-text bg-white border-end-0"><i class="bi bi-search"></i></span>
+        <input type="text" id="filtroInput" class="form-control border-start-0" placeholder="Buscar obra...">
+    </div>
+    
+    <div class="dropdown">
+        <button class="btn btn-light btn-sm dropdown-toggle border" type="button" data-bs-toggle="dropdown">
+            Ordenar por
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end shadow">
+            <li><a class="dropdown-item" href="index.php?page=obras&ordem=cod_desc">Código (Padrão)</a></li>
+            <li><a class="dropdown-item" href="index.php?page=obras&ordem=valor_desc">Maior Valor Gasto</a></li>
+            <li><a class="dropdown-item" href="index.php?page=obras&ordem=nome_asc">Nome (A-Z)</a></li>
+        </ul>
+    </div>
 </div>
 
 <div class="row" id="listaObras">
     <?php foreach($obras as $obra): 
-        $progresso = ($obra['total_itens'] > 0) ? round(($obra['itens_concluidos'] / $obra['total_itens']) * 100) : 0;
-        
-        $cor_prog = 'primary';
-        if($progresso == 100) $cor_prog = 'success';
-        elseif($progresso < 30) $cor_prog = 'danger';
-        elseif($progresso < 70) $cor_prog = 'warning';
-
-        $textoBusca = strtolower($obra['codigo'] . ' ' . $obra['nome'] . ' ' . $obra['nome_empresa']);
+        $textoBusca = strtolower($obra['nome'] . ' ' . $obra['codigo']);
     ?>
     <div class="col-xl-3 col-md-6 mb-4 obra-item" data-busca="<?php echo $textoBusca; ?>">
-        <div class="card shadow-sm h-100 border-top border-4 border-<?php echo $cor_prog; ?> hover-effect">
-            <div class="card-body d-flex flex-column">
+        <div class="card shadow-sm h-100 border-0 hover-effect">
+            <div class="card-body d-flex flex-column p-3">
                 
                 <div class="d-flex justify-content-between align-items-start mb-2">
-                    <span class="badge bg-light text-dark border">CÓD: <?php echo $obra['codigo']; ?></span>
-                    <?php if($progresso == 100): ?>
-                        <span class="badge bg-success"><i class="bi bi-check-lg"></i> 100%</span>
-                    <?php endif; ?>
+                    <span class="badge bg-dark"><?php echo $obra['codigo']; ?></span>
+                    <span class="badge bg-light text-muted border"><?php echo $obra['qtd_pedidos']; ?> OFs</span>
                 </div>
-
-                <h5 class="card-title fw-bold text-dark text-truncate mt-1" title="<?php echo $obra['nome']; ?>">
+                
+                <h6 class="card-title fw-bold text-dark text-truncate mb-3" title="<?php echo $obra['nome']; ?>">
                     <?php echo $obra['nome']; ?>
-                </h5>
-                <small class="text-muted mb-3 d-block text-truncate">
-                    <i class="bi bi-building"></i> <?php echo $obra['nome_empresa']; ?>
-                </small>
+                </h6>
 
-                <div class="mb-3">
-                    <div class="d-flex justify-content-between small fw-bold mb-1">
-                        <span>Progresso (Filtro)</span>
-                        <span class="text-<?php echo $cor_prog; ?>"><?php echo $progresso; ?>%</span>
+                <div class="mt-auto bg-light rounded p-2">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <small class="text-muted" style="font-size: 10px;">PEDIDO (BRUTO)</small>
+                        <span class="fw-bold text-primary small">R$ <?php echo number_format($obra['total_gasto'], 2, ',', '.'); ?></span>
                     </div>
-                    <div class="progress" style="height: 6px;">
-                        <div class="progress-bar bg-<?php echo $cor_prog; ?>" role="progressbar" style="width: <?php echo $progresso; ?>%"></div>
+                    <div class="d-flex justify-content-between align-items-center">
+                        <small class="text-muted" style="font-size: 10px;">EXECUTADO (REC)</small>
+                        <span class="fw-bold text-success small">R$ <?php echo number_format($obra['total_executado'], 2, ',', '.'); ?></span>
                     </div>
-                    <small class="text-muted" style="font-size: 10px;">
-                        <?php echo $obra['itens_concluidos']; ?> / <?php echo $obra['total_itens']; ?> itens
-                    </small>
                 </div>
+                
+                <a href="index.php?page=detalhe_obra&id=<?php echo $obra['id']; ?>" class="btn btn-outline-dark btn-sm w-100 mt-2 fw-bold stretched-link">
+                    ABRIR
+                </a>
 
-                <div class="mt-auto pt-2 border-top d-flex justify-content-between align-items-center">
-                    <div>
-                        <small class="text-muted d-block" style="font-size: 10px;">INVESTIDO (FILTRO)</small>
-                        <span class="fw-bold text-dark">R$ <?php echo number_format($obra['total_gasto'], 2, ',', '.'); ?></span>
-                    </div>
-                    <a href="index.php?page=detalhe_obra&id=<?php echo $obra['id']; ?>" class="btn btn-outline-dark btn-sm fw-bold stretched-link">
-                        ABRIR
-                    </a>
-                </div>
             </div>
         </div>
     </div>

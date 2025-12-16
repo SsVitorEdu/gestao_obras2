@@ -72,11 +72,18 @@ else die("<h1>Erro: Arquivo de conexão (db.php) não encontrado.</h1>");
             <i class="bi bi-truck-front-fill"></i> Fornecedores
         </a>
 
+        <a href="index.php?page=gerenciador_global" class="<?php echo (isset($_GET['page']) && $_GET['page']=='gerenciador_global')?'active':''; ?>">
+            <i class="bi bi-truck-front-fill"></i> gerenciador_global
+        </a>
+
         <a href="index.php?page=clientes" class="<?php echo (isset($_GET['page']) && $_GET['page']=='clientes')?'active':''; ?>">
             <i class="bi bi-briefcase-fill"></i> Clientes
         </a>
 
- 
+        <a href="index.php?page=indicadores" class="<?php echo (isset($_GET['page']) && $_GET['page']=='Indicadores')?'active':''; ?>">
+            <i class="bi bi-briefcase-fill"></i> Indicadores
+        </a>
+
         <a href="index.php?page=configuracoes" class="<?php echo (isset($_GET['page']) && $_GET['page']=='configuracoes')?'active':''; ?>">
             <i class="bi bi-gear-fill"></i> Configurações
         </a>
