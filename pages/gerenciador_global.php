@@ -1,5 +1,5 @@
 <?php
-// GERENCIADOR GLOBAL V3 - CORREÇÃO DE COLUNAS INEXISTENTES (SEM NUMERO_CONTRATO/DESCRICAO)
+// GERENCIADOR GLOBAL V4 - OTIMIZADO (PADRÃO MÊS ATUAL) + CAMPOS ATIVOS
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 set_time_limit(300);
@@ -10,8 +10,9 @@ if (!isset($pdo)) {
     if (file_exists($db_file)) include $db_file;
 }
 
-// LÓGICA DE SALVAR (UPDATE)
 $msg = "";
+
+// LÓGICA DE SALVAR (UPDATE)
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['acao'])) {
     try {
         if ($_POST['acao'] == 'editar_pedido') {
@@ -30,15 +31,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['acao'])) {
             $msg = "<div class='alert alert-success shadow-sm'>✅ Pedido atualizado com sucesso!</div>";
         }
         elseif ($_POST['acao'] == 'editar_contrato') {
-            // CORREÇÃO: Removemos numero_contrato e descricao que não existem no banco
+            // AGORA COM TODOS OS CAMPOS (JÁ QUE O BANCO FOI CORRIGIDO)
             $sql = "UPDATE contratos SET 
-                    data_contrato = ?, valor = ?, 
-                    responsavel = ?, fornecedor_id = ?
+                    data_contrato = ?, numero_contrato = ?, valor = ?, 
+                    descricao = ?, responsavel = ?, fornecedor_id = ?
                     WHERE id = ?";
             $stmt = $pdo->prepare($sql);
             $stmt->execute([
-                $_POST['data_contrato'], $_POST['valor'], 
-                $_POST['responsavel'], $_POST['fornecedor_id'], 
+                $_POST['data_contrato'], $_POST['numero_contrato'], $_POST['valor'], 
+                $_POST['descricao'], $_POST['responsavel'], $_POST['fornecedor_id'], 
                 $_POST['id']
             ]);
             $msg = "<div class='alert alert-success shadow-sm'>✅ Contrato atualizado com sucesso!</div>";
@@ -56,9 +57,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['acao'])) {
     }
 }
 
-// --- 2. FILTROS ---
-$dt_ini = $_GET['dt_ini'] ?? date('Y-01-01');
-$dt_fim = $_GET['dt_fim'] ?? date('Y-12-31');
+// --- 2. FILTROS OTIMIZADOS ---
+// PADRÃO: Pega apenas o MÊS ATUAL (Do dia 01 até o último dia 't')
+$dt_ini = $_GET['dt_ini'] ?? date('Y-m-01'); 
+$dt_fim = $_GET['dt_fim'] ?? date('Y-m-t');
+
 $f_forn = $_GET['f_forn'] ?? '';
 $f_obra = $_GET['f_obra'] ?? '';
 $f_pag  = $_GET['f_pag'] ?? '';
@@ -82,10 +85,13 @@ if($f_obra) { $sql_ped .= " AND p.obra_id = ?"; $params_ped[] = $f_obra; }
 if($f_pag)  { $sql_ped .= " AND p.forma_pagamento = ?"; $params_ped[] = $f_pag; }
 if($f_of)   { $sql_ped .= " AND p.numero_of LIKE ?"; $params_ped[] = "%$f_of%"; }
 
+// Adicionado ORDER BY para organizar a lista
+$sql_ped .= " ORDER BY p.data_pedido DESC";
+
 $pedidos = $pdo->prepare($sql_ped);
 $pedidos->execute($params_ped);
 
-// QUERY CONTRATOS (CORRIGIDA - REMOVIDO CAMPOS INEXISTENTES)
+// QUERY CONTRATOS
 $sql_con = "SELECT c.*, f.nome as forn_nome 
             FROM contratos c 
             LEFT JOIN fornecedores f ON c.fornecedor_id = f.id 
@@ -93,6 +99,8 @@ $sql_con = "SELECT c.*, f.nome as forn_nome
 $params_con = [$dt_ini, $dt_fim];
 
 if($f_forn) { $sql_con .= " AND c.fornecedor_id = ?"; $params_con[] = $f_forn; }
+
+$sql_con .= " ORDER BY c.data_contrato DESC";
 
 $contratos = $pdo->prepare($sql_con);
 $contratos->execute($params_con);
@@ -120,9 +128,14 @@ $contratos->execute($params_con);
 <div class="container-fluid p-4">
     
     <div class="d-flex justify-content-between align-items-center mb-4">
-        <h3 class="fw-bold text-dark"><i class="bi bi-pencil-square text-primary me-2"></i>Gerenciador Global</h3>
         <div>
+            <h3 class="fw-bold text-dark"><i class="bi bi-pencil-square text-primary me-2"></i>Gerenciador Global</h3>
             <span class="badge bg-white text-muted border px-3 py-2 rounded-pill">Central de Edição</span>
+        </div>
+        <div>
+            <a href="index.php?page=importar_contratos" class="btn btn-warning btn-sm fw-bold shadow-sm">
+                <i class="bi bi-file-earmark-spreadsheet"></i> Importar Contratos
+            </a>
         </div>
     </div>
 
@@ -134,7 +147,7 @@ $contratos->execute($params_con);
                 <input type="hidden" name="page" value="gerenciador_global">
                 <div class="row g-3">
                     <div class="col-md-3">
-                        <label class="form-label small fw-bold text-muted">Período</label>
+                        <label class="form-label small fw-bold text-muted">Período (Mês Atual)</label>
                         <div class="input-group input-group-sm">
                             <input type="date" name="dt_ini" class="form-control" value="<?= $dt_ini ?>">
                             <span class="input-group-text">a</span>
@@ -241,9 +254,11 @@ $contratos->execute($params_con);
                         <tr>
                             <th>Ações</th>
                             <th>Data</th>
-                            <th>ID/Cód</th> <th>Fornecedor</th>
+                            <th>Nº Contrato</th>
+                            <th>Fornecedor</th>
                             <th>Valor Global</th>
                             <th>Responsável</th>
+                            <th>Descrição</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -254,9 +269,11 @@ $contratos->execute($params_con);
                                 <button class="btn btn-outline-danger btn-sm btn-icon" onclick="excluirItem(<?= $c['id'] ?>, 'contrato')" title="Excluir"><i class="bi bi-trash"></i></button>
                             </td>
                             <td><?= date('d/m/Y', strtotime($c['data_contrato'])) ?></td>
-                            <td class="fw-bold">#<?= $c['id'] ?></td> <td><?= $c['forn_nome'] ?></td>
+                            <td class="fw-bold"><?= $c['numero_contrato'] ?></td>
+                            <td><?= $c['forn_nome'] ?></td>
                             <td class="fw-bold text-success">R$ <?= number_format($c['valor'], 2, ',', '.') ?></td>
                             <td><?= $c['responsavel'] ?></td>
+                            <td class="small text-muted text-truncate" style="max-width: 200px;"><?= $c['descricao'] ?></td>
                         </tr>
                         <?php endwhile; ?>
                     </tbody>
@@ -290,13 +307,13 @@ $contratos->execute($params_con);
                         
                         <div class="col-12">
                             <label class="form-label small fw-bold">Obra</label>
-                            <select name="obra_id" id="ped_obra" class="form-select">
+                            <select name="obra_id" id="ped_obra" class="form-select select2-modal">
                                 <?php foreach($lista_obras as $o) echo "<option value='".$o['id']."'>".$o['nome']."</option>"; ?>
                             </select>
                         </div>
                         <div class="col-12">
                             <label class="form-label small fw-bold">Fornecedor</label>
-                            <select name="fornecedor_id" id="ped_forn" class="form-select">
+                            <select name="fornecedor_id" id="ped_forn" class="form-select select2-modal">
                                 <?php foreach($lista_forns as $f) echo "<option value='".$f['id']."'>".$f['nome']."</option>"; ?>
                             </select>
                         </div>
@@ -342,6 +359,7 @@ $contratos->execute($params_con);
                 <div class="modal-body">
                     <input type="hidden" name="acao" value="editar_contrato">
                     <input type="hidden" name="id" id="con_id">
+                    
                     <div class="row g-3">
                         <div class="col-12">
                             <label class="form-label small fw-bold">Fornecedor</label>
@@ -353,6 +371,10 @@ $contratos->execute($params_con);
                             </select>
                         </div>
                         <div class="col-6">
+                            <label class="form-label small fw-bold">Nº Contrato</label>
+                            <input type="text" name="numero_contrato" id="con_num" class="form-control" required>
+                        </div>
+                        <div class="col-6">
                             <label class="form-label small fw-bold">Data</label>
                             <input type="date" name="data_contrato" id="con_data" class="form-control" required>
                         </div>
@@ -360,9 +382,13 @@ $contratos->execute($params_con);
                             <label class="form-label small fw-bold">Valor Global (R$)</label>
                             <input type="number" step="0.01" name="valor" id="con_valor" class="form-control" required>
                         </div>
-                        <div class="col-12">
+                        <div class="col-6">
                             <label class="form-label small fw-bold">Responsável</label>
                             <input type="text" name="responsavel" id="con_resp" class="form-control">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label small fw-bold">Descrição</label>
+                            <textarea name="descricao" id="con_desc" class="form-control" rows="3"></textarea>
                         </div>
                     </div>
                 </div>
@@ -413,8 +439,10 @@ function editarPedido(dados) {
 // Preenche Modal Contrato
 function editarContrato(dados) {
     $('#con_id').val(dados.id);
-    // Campos removidos: $('#con_num').val(dados.numero_contrato); 
-    // Campos removidos: $('#con_desc').val(dados.descricao);
+    // Campos ativos novamente
+    $('#con_num').val(dados.numero_contrato); 
+    $('#con_desc').val(dados.descricao);
+    
     $('#con_data').val(dados.data_contrato);
     $('#con_valor').val(dados.valor);
     $('#con_resp').val(dados.responsavel);

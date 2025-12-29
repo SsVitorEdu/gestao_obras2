@@ -1,319 +1,386 @@
 <?php
-// DETALHE DO CLIENTE (LAYOUT MODERNO E COMPACTO)
+// DETALHE DO CLIENTE - ATUALIZADO (COM CAMPO RESPONSÁVEL)
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 
 $id_cliente = $_GET['id'] ?? 0;
 
-// 1. DADOS DO CLIENTE
+if (!isset($pdo)) {
+    $db_file = __DIR__ . '/../includes/db.php';
+    if (file_exists($db_file)) include $db_file;
+    else include __DIR__ . '/../db.php'; // Fallback
+}
+
+// --- FUNÇÃO DE AJUDA ---
+function limparDinheiro($val) {
+    if (!$val) return 0;
+    $val = str_replace('.', '', $val); // Tira ponto de milhar
+    $val = str_replace(',', '.', $val); // Troca vírgula por ponto
+    return (float)$val;
+}
+
+// 2. BUSCA DADOS DO CLIENTE
 $stmt = $pdo->prepare("SELECT * FROM clientes_imob WHERE id = ?");
 $stmt->execute([$id_cliente]);
 $cliente = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if(!$cliente) {
-    echo "<div class='alert alert-warning'>Cliente não encontrado. <a href='index.php?page=clientes'>Voltar</a></div>";
-    exit;
-}
+if(!$cliente) die("<div class='alert alert-danger'>Cliente não encontrado!</div>");
 
-// 2. BUSCA CONTRATOS
-$stmtVendas = $pdo->prepare("SELECT * FROM vendas_imob WHERE cliente_id = ? ORDER BY id DESC");
+// 3. BUSCA VENDAS (CONTRATOS)
+// O SELECT * já vai trazer a coluna 'responsavel' automaticamente se ela existir no banco
+$stmtVendas = $pdo->prepare("SELECT * FROM vendas_imob WHERE cliente_id = ? ORDER BY data_contrato DESC");
 $stmtVendas->execute([$id_cliente]);
 $vendas = $stmtVendas->fetchAll(PDO::FETCH_ASSOC);
+
+// 4. BUSCA PARCELAS
+$stmtParc = $pdo->prepare("SELECT * FROM parcelas_imob WHERE venda_id IN (SELECT id FROM vendas_imob WHERE cliente_id = ?) ORDER BY data_vencimento ASC");
+$stmtParc->execute([$id_cliente]);
+$todas_parcelas = $stmtParc->fetchAll(PDO::FETCH_ASSOC);
+
+// Organiza parcelas por venda
+$parcelas_por_venda = [];
+foreach($todas_parcelas as $p) {
+    $parcelas_por_venda[$p['venda_id']][] = $p;
+}
 ?>
 
-<link rel="stylesheet" href="https://cdn.datatables.net/1.13.4/css/dataTables.bootstrap5.min.css">
-<link rel="stylesheet" href="https://cdn.datatables.net/buttons/2.3.6/css/buttons.bootstrap5.min.css">
-
-<style>
-    /* LAYOUT LIMPO (Sem mesa gigante) */
-    .container-fluid { max-width: 1600px; margin: 0 auto; }
-
-    /* CORES DE STATUS (SUAVES) */
-    .bg-soft-green { background-color: #d1e7dd !important; color: #0f5132; } /* Pago */
-    .bg-soft-warning { background-color: #fff3cd !important; color: #664d03; } /* Parcial */
-    .bg-soft-danger { background-color: #f8d7da !important; color: #842029; } /* Atrasado */
-    .bg-soft-light { background-color: #fff !important; color: #555; } /* A Vencer */
-
-    /* TABELA COMPACTA PROFISSIONAL */
-    .tabela-parcelas th { 
-        background-color: #343a40; 
-        color: white; 
-        text-align: center; 
-        font-size: 10px; 
-        padding: 6px; 
-        text-transform: uppercase; 
-    }
-    .tabela-parcelas td { 
-        vertical-align: middle; 
-        padding: 4px 8px; 
-        font-size: 12px; 
-        border-color: #dee2e6; 
-    }
-
-    /* CABEÇALHO CONTRATO (Mais compacto) */
-    .card-contrato { border: 1px solid #0d6efd; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    .header-contrato { background: linear-gradient(to right, #0d6efd, #0a58ca); color: white; padding: 10px 15px; }
-    
-    /* BADGES DE RESUMO */
-    .badge-resumo { background: rgba(0,0,0,0.2); padding: 3px 8px; border-radius: 4px; font-size: 0.75rem; margin-right: 5px; border: 1px solid rgba(255,255,255,0.1); }
-    
-    .btn-action-header { color: white; border: 1px solid rgba(255,255,255,0.5); font-size: 0.75rem; padding: 2px 6px; border-radius: 4px; transition: 0.2s; }
-    .btn-action-header:hover { background: rgba(255,255,255,0.2); color: white; text-decoration: none; }
-</style>
-
-<div class="container-fluid px-3 pt-3"> 
+<div class="container-fluid px-4 pt-3">
     
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
-            <h4 class="text-primary fw-bold m-0"><i class="bi bi-person-vcard"></i> <?php echo htmlspecialchars($cliente['nome']); ?></h4>
-            <span class="badge bg-light text-dark border mt-1">DOC: <?php echo $cliente['cpf'] ?? '-'; ?></span>
+            <span class="badge bg-secondary mb-1">CLIENTE</span>
+            <h3 class="fw-bold text-dark m-0"><?php echo $cliente['nome']; ?></h3>
+            <div class="text-muted small">
+                <i class="bi bi-person-vcard"></i> CPF: <?php echo $cliente['cpf'] ?? '---'; ?> | 
+                <i class="bi bi-telephone"></i> Tel: <?php echo $cliente['telefone'] ?? '---'; ?>
+            </div>
         </div>
-        <div class="d-flex gap-2">
-            <button class="btn btn-success btn-sm fw-bold shadow-sm" onclick="novoContrato()">
-                <i class="bi bi-plus-circle"></i> Novo Contrato
+        <div>
+            <button class="btn btn-primary fw-bold shadow-sm" onclick="novoContrato()">
+                <i class="bi bi-plus-lg"></i> NOVO CONTRATO
             </button>
-            <a href="index.php?page=central_importacoes&tab=imob" class="btn btn-warning btn-sm shadow-sm fw-bold"><i class="bi bi-cloud-upload"></i> Importar</a>
-            <a href="index.php?page=clientes" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-left"></i> Voltar</a>
+            <a href="index.php?page=clientes" class="btn btn-outline-secondary ms-2">Voltar</a>
         </div>
     </div>
 
-    <?php if(empty($vendas)): ?>
-        <div class="alert alert-light border text-center p-5 text-muted">
-            <h4><i class="bi bi-folder-plus"></i> Nenhum contrato registrado.</h4>
-            <p>Clique em "Novo Contrato" ou use a importação.</p>
-        </div>
+    <?php if(isset($_GET['msg'])): ?>
+        <?php if($_GET['msg']=='venda_salva'): ?>
+            <div class="alert alert-success small py-2">✅ Contrato salvo com sucesso!</div>
+        <?php elseif($_GET['msg']=='parcela_salva'): ?>
+            <div class="alert alert-success small py-2">✅ Parcela atualizada!</div>
+        <?php elseif($_GET['msg']=='venda_excluida'): ?>
+            <div class="alert alert-danger small py-2">🗑️ Contrato excluído!</div>
+        <?php endif; ?>
     <?php endif; ?>
 
-    <?php foreach($vendas as $venda): 
-        $stmtParc = $pdo->prepare("SELECT * FROM parcelas_imob WHERE venda_id = ? ORDER BY data_vencimento ASC");
-        $stmtParc->execute([$venda['id']]);
-        $parcelas = $stmtParc->fetchAll(PDO::FETCH_ASSOC);
-        
-        // CÁLCULOS
-        $hoje = date('Y-m-d');
-        $total_pago = 0; 
-        $total_orig = 0;
-        
-        $qtd_total = count($parcelas);
-        $qtd_pagas = 0;
-        $qtd_atrasadas = 0;
-        $qtd_abertas = 0;
-
-        foreach($parcelas as $p) { 
-            $total_pago += $p['valor_pago']; 
-            $total_orig += $p['valor_parcela'];
+    <div class="row">
+        <?php foreach($vendas as $v): 
+            $p_venda = $parcelas_por_venda[$v['id']] ?? [];
             
-            if ($p['valor_pago'] >= ($p['valor_parcela'] - 0.1)) {
-                $qtd_pagas++;
-            } elseif ($p['data_vencimento'] < $hoje && $p['valor_pago'] < $p['valor_parcela']) {
-                $qtd_atrasadas++;
-            } else {
-                $qtd_abertas++;
-            }
-        }
-        
-        $perc_pagas = ($qtd_total > 0) ? round(($qtd_pagas / $qtd_total) * 100) : 0;
-        $jsonVenda = htmlspecialchars(json_encode($venda), ENT_QUOTES, 'UTF-8');
-    ?>
-    
-    <div class="card card-contrato" id="venda_<?php echo $venda['id']; ?>">
-        <div class="header-contrato">
-            <div class="d-flex justify-content-between align-items-center mb-2">
-                <div class="d-flex align-items-center gap-3">
-                    <div class="bg-white p-1 rounded text-primary fs-4 shadow-sm"><i class="bi bi-building"></i></div>
+            // Cálculos
+            $total_pago = 0;
+            foreach($p_venda as $pp) $total_pago += $pp['valor_pago'];
+            
+            $total_contrato = $v['valor_total'];
+            $saldo = $total_contrato - $total_pago;
+            $progresso = ($total_contrato > 0) ? ($total_pago / $total_contrato) * 100 : 0;
+
+            // Prepara JSON para edição
+            $json_venda = htmlspecialchars(json_encode($v), ENT_QUOTES, 'UTF-8');
+        ?>
+        <div class="col-12 mb-4">
+            <div class="card shadow-sm border-0">
+                <div class="card-header bg-white py-3 border-bottom d-flex flex-wrap justify-content-between align-items-center gap-3">
+                    
                     <div>
-                        <h5 class="m-0 fw-bold" style="font-size: 1rem;"><?php echo $venda['nome_casa'] ?: 'Nome do Empreendimento (Não informado)'; ?></h5>
-                        <small class="opacity-75" style="font-size: 0.75rem;"><?php echo $venda['nome_empresa'] ?: 'Empresa Vendedora'; ?></small>
+                        <small class="text-muted fw-bold d-block">EMPREENDIMENTO / LOTE</small>
+                        <h5 class="fw-bold text-primary m-0">
+                            <?php echo $v['nome_empresa']; ?> 
+                            <span class="text-dark">| <?php echo $v['nome_casa']; ?></span>
+                        </h5>
+                        <small class="text-secondary">Cod: <?php echo $v['codigo_compra']; ?></small>
                     </div>
-                </div>
-                <div class="text-end">
-                    <span class="badge bg-white text-primary shadow-sm mb-1">COD: <?php echo $venda['codigo_compra']; ?></span>
-                    <div class="d-flex justify-content-end gap-1">
-                        <button class="btn-action-header" onclick="editarContrato(<?php echo $jsonVenda; ?>)" title="Editar">
-                            <i class="bi bi-pencil-square"></i>
+
+                    <div class="px-3 border-start border-end">
+                        <small class="text-muted fw-bold d-block">RESPONSÁVEL VENDA</small>
+                        <span class="fw-bold text-dark">
+                            <i class="bi bi-person-badge-fill text-secondary"></i> 
+                            <?php echo !empty($v['responsavel']) ? mb_strtoupper($v['responsavel']) : '<span class="text-muted fst-italic">-- Não informado --</span>'; ?>
+                        </span>
+                    </div>
+
+                    <div class="text-end">
+                        <small class="text-muted fw-bold d-block">VALOR TOTAL</small>
+                        <h5 class="fw-bold text-dark m-0">R$ <?php echo number_format($total_contrato, 2, ',', '.'); ?></h5>
+                    </div>
+
+                    <div class="text-end">
+                        <small class="text-muted fw-bold d-block">SALDO DEVEDOR</small>
+                        <h5 class="fw-bold text-danger m-0">R$ <?php echo number_format($saldo, 2, ',', '.'); ?></h5>
+                    </div>
+
+                    <div>
+                        <button class="btn btn-outline-primary btn-sm" onclick="editarContrato(<?php echo $json_venda; ?>)">
+                            <i class="bi bi-pencil"></i> Editar
                         </button>
-                        <a href="actions/excluir_venda.php?id=<?php echo $venda['id']; ?>&cli=<?php echo $id_cliente; ?>" 
-                           class="btn-action-header text-danger border-danger bg-white" 
-                           onclick="return confirm('ATENÇÃO: Vai apagar o contrato e TODAS as parcelas! Confirma?')" title="Excluir">
-                            <i class="bi bi-trash-fill"></i>
-                        </a>
+                        <button class="btn btn-outline-danger btn-sm" onclick="excluirContrato(<?php echo $v['id']; ?>)">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="progress" style="height: 4px; border-radius: 0;">
+                    <div class="progress-bar bg-success" style="width: <?php echo $progresso; ?>%"></div>
+                </div>
+
+                <div class="card-body bg-light p-2">
+                    <div class="d-flex justify-content-between align-items-center mb-2 px-2">
+                        <strong class="small text-muted"><i class="bi bi-list-ol"></i> PARCELAS DO CONTRATO</strong>
+                        <button class="btn btn-success btn-sm py-0" style="font-size: 11px;" onclick="novaParcela(<?php echo $v['id']; ?>)">
+                            + ADD PARCELA
+                        </button>
+                    </div>
+
+                    <div class="table-responsive bg-white border rounded">
+                        <table class="table table-sm table-hover mb-0" style="font-size: 13px;">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Nº</th>
+                                    <th>Vencimento</th>
+                                    <th>Valor Parcela</th>
+                                    <th>Pagamento</th>
+                                    <th>Valor Pago</th>
+                                    <th>Status</th>
+                                    <th class="text-end">Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach($p_venda as $pp): 
+                                    $status = ($pp['valor_pago'] >= $pp['valor_parcela'] - 0.01) ? 
+                                        '<span class="badge bg-success">PAGO</span>' : 
+                                        ((strtotime($pp['data_vencimento']) < time()) ? '<span class="badge bg-danger">VENCIDO</span>' : '<span class="badge bg-warning text-dark">ABERTO</span>');
+                                    
+                                    $json_parc = htmlspecialchars(json_encode($pp), ENT_QUOTES, 'UTF-8');
+                                ?>
+                                <tr>
+                                    <td class="fw-bold text-center"><?php echo $pp['numero_parcela']; ?></td>
+                                    <td><?php echo date('d/m/Y', strtotime($pp['data_vencimento'])); ?></td>
+                                    <td class="fw-bold">R$ <?php echo number_format($pp['valor_parcela'], 2, ',', '.'); ?></td>
+                                    
+                                    <td><?php echo $pp['data_pagamento'] ? date('d/m/Y', strtotime($pp['data_pagamento'])) : '-'; ?></td>
+                                    <td class="<?php echo $pp['valor_pago']>0 ? 'text-success fw-bold' : 'text-muted'; ?>">
+                                        <?php echo $pp['valor_pago']>0 ? 'R$ '.number_format($pp['valor_pago'], 2, ',', '.') : '-'; ?>
+                                    </td>
+                                    
+                                    <td><?php echo $status; ?></td>
+                                    
+                                    <td class="text-end">
+                                        <button class="btn btn-link p-0 text-primary me-2" onclick="editarParcela(<?php echo $json_parc; ?>)"><i class="bi bi-pencil-square"></i></button>
+                                        <button class="btn btn-link p-0 text-danger" onclick="excluirParcela(<?php echo $pp['id']; ?>)"><i class="bi bi-trash"></i></button>
+                                    </td>
+                                </tr>
+                                <?php endforeach; ?>
+                                <?php if(empty($p_venda)): ?>
+                                    <tr><td colspan="7" class="text-center text-muted py-3">Nenhuma parcela lançada.</td></tr>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>
-            
-            <div class="d-flex flex-wrap align-items-center pt-2 border-top border-white border-opacity-25 gap-2">
-                <span class="badge-resumo"><i class="bi bi-list-ol"></i> <?php echo $qtd_total; ?> Total</span>
-                <span class="badge-resumo bg-success bg-opacity-75 border-0"><i class="bi bi-check-circle"></i> <?php echo $qtd_pagas; ?> Pagas</span>
-                <?php if($qtd_atrasadas > 0): ?>
-                    <span class="badge-resumo bg-danger bg-opacity-75 border-0"><i class="bi bi-exclamation-triangle"></i> <?php echo $qtd_atrasadas; ?> Atrasadas</span>
-                <?php endif; ?>
-                
-                <div class="progress ms-2" style="width: 80px; height: 6px; background-color: rgba(255,255,255,0.3);">
-                    <div class="progress-bar bg-warning" role="progressbar" style="width: <?php echo $perc_pagas; ?>%"></div>
-                </div>
-                <small class="ms-1 text-white fw-bold" style="font-size: 0.7rem;"><?php echo $perc_pagas; ?>%</small>
-
-                <div class="ms-auto bg-warning text-dark px-2 py-0 rounded shadow-sm">
-                    <small class="fw-bold text-uppercase" style="font-size: 0.65rem;">Total Contrato:</small>
-                    <span class="fw-bold" style="font-size: 0.85rem;">R$ <?php echo number_format($venda['valor_total'], 2, ',', '.'); ?></span>
-                </div>
-            </div>
         </div>
-
-        <div class="card-body p-0">
-            <div style="max-height: 400px; overflow-y: auto;">
-                <table class="table table-bordered table-hover mb-0 tabela-parcelas table-sm">
-                    <thead class="sticky-top">
-                        <tr>
-                            <th width="60">AÇÃO</th>
-                            <th width="50">#</th>
-                            <th width="100">STATUS</th>
-                            <th width="100">VENCIMENTO</th>
-                            <th width="120">ORIGINAL</th>
-                            <th width="100">DT PAGTO</th>
-                            <th width="120">VALOR PAGO</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach($parcelas as $p): 
-                            $hoje = date('Y-m-d');
-                            $classe = "bg-soft-light"; 
-                            $status_txt = "ABERTO";
-                            $icone = '<i class="bi bi-circle text-muted"></i>';
-
-                            if($p['valor_pago'] >= ($p['valor_parcela'] - 0.1) && $p['valor_parcela'] > 0) { 
-                                $classe = "bg-soft-green"; 
-                                $status_txt = "PAGO"; 
-                                $icone = '<i class="bi bi-check-circle-fill text-success"></i>';
-                            } 
-                            elseif($p['data_vencimento'] < $hoje && $p['valor_pago'] < $p['valor_parcela']) { 
-                                $classe = "bg-soft-danger"; 
-                                $status_txt = "VENCIDO";
-                                $icone = '<i class="bi bi-exclamation-circle-fill text-danger"></i>';
-                            }
-                            elseif($p['valor_pago'] > 0) { 
-                                $classe = "bg-soft-warning"; 
-                                $status_txt = "PARCIAL";
-                                $icone = '<i class="bi bi-pie-chart-fill text-warning"></i>';
-                            }
-
-                            $jsonParc = htmlspecialchars(json_encode($p), ENT_QUOTES, 'UTF-8');
-                        ?>
-                        <tr class="<?php echo $classe; ?>">
-                            <td class="text-center bg-white">
-                                <button class="btn btn-sm btn-light border py-0 px-1" onclick="editarParcela(<?php echo $jsonParc; ?>)" title="Editar"><i class="bi bi-pencil" style="font-size: 10px;"></i></button>
-                                <a href="actions/excluir_parcela.php?id=<?php echo $p['id']; ?>&cli=<?php echo $id_cliente; ?>" 
-                                   class="btn btn-sm btn-light border py-0 px-1 text-danger" 
-                                   onclick="return confirm('Excluir?')" title="Excluir"><i class="bi bi-x" style="font-size: 10px;"></i></a>
-                            </td>
-                            <td class="text-center fw-bold text-muted"><?php echo $p['numero_parcela']; ?></td>
-                            <td class="text-center small fw-bold" style="font-size: 0.7rem;">
-                                <?php echo $icone . ' ' . $status_txt; ?>
-                            </td>
-                            <td class="text-center"><?php echo date('d/m/y', strtotime($p['data_vencimento'])); ?></td>
-                            <td class="text-end fw-bold text-secondary">R$ <?php echo number_format($p['valor_parcela'], 2, ',', '.'); ?></td>
-                            <td class="text-center text-muted small"><?php echo $p['data_pagamento'] ? date('d/m/y', strtotime($p['data_pagamento'])) : '-'; ?></td>
-                            <td class="text-end fw-bold text-dark">R$ <?php echo number_format($p['valor_pago'], 2, ',', '.'); ?></td>
-                        </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
+        <?php endforeach; ?>
+        
+        <?php if(empty($vendas)): ?>
+            <div class="col-12 text-center py-5">
+                <h4 class="text-muted">Este cliente ainda não tem contratos.</h4>
+                <button class="btn btn-primary mt-3" onclick="novoContrato()">Criar Primeiro Contrato</button>
             </div>
-            <div class="bg-light p-2 border-top d-flex justify-content-between align-items-center">
-                <button class="btn btn-xs btn-outline-primary fw-bold" onclick="novaParcela(<?php echo $venda['id']; ?>)">
-                    <i class="bi bi-plus-lg"></i> Add Parcela
-                </button>
-                <div class="small fw-bold text-secondary">
-                    Total Pago: <span class="text-success fs-6">R$ <?php echo number_format($total_pago, 2, ',', '.'); ?></span>
-                </div>
-            </div>
-        </div>
+        <?php endif; ?>
     </div>
-    <?php endforeach; ?>
 </div>
 
 <div class="modal fade" id="modalVenda" tabindex="-1">
     <div class="modal-dialog modal-lg">
         <div class="modal-content">
-            <div class="modal-header bg-primary text-white py-2">
-                <h6 class="modal-title fw-bold" id="tituloModalVenda">Dados do Contrato</h6>
+            <div class="modal-header bg-dark text-white">
+                <h5 class="modal-title" id="tituloModalVenda">Contrato</h5>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <form action="actions/salvar_venda.php" method="POST">
-                <div class="modal-body bg-light">
-                    <input type="hidden" name="id" id="venda_id">
-                    <input type="hidden" name="cliente_id" value="<?php echo $id_cliente; ?>">
-                    <div class="row g-2">
-                        <div class="col-md-3"><label class="small fw-bold">Código</label><input type="text" name="codigo_compra" id="venda_codigo" class="form-control form-control-sm" required></div>
-                        <div class="col-md-9"><label class="small fw-bold">Empreendimento</label><input type="text" name="nome_casa" id="venda_casa" class="form-control form-control-sm" required></div>
-                        <div class="col-md-12"><label class="small fw-bold">Empresa</label><input type="text" name="nome_empresa" id="venda_empresa" class="form-control form-control-sm"></div>
-                        <div class="col-md-3"><label class="small fw-bold">Data Contrato</label><input type="date" name="data_contrato" id="venda_dt_con" class="form-control form-control-sm"></div>
-                        <div class="col-md-3"><label class="small fw-bold">Início</label><input type="date" name="data_inicio" id="venda_dt_ini" class="form-control form-control-sm"></div>
-                        <div class="col-md-3"><label class="small fw-bold">Fim</label><input type="date" name="data_fim" id="venda_dt_fim" class="form-control form-control-sm"></div>
-                        <div class="col-md-3"><label class="small fw-bold text-success">Valor Total</label><input type="text" name="valor_total" id="venda_valor" class="form-control form-control-sm" required></div>
+                <input type="hidden" name="cliente_id" value="<?php echo $id_cliente; ?>">
+                <input type="hidden" name="id" id="venda_id">
+                
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-md-3">
+                            <label class="form-label small fw-bold">Código Interno</label>
+                            <input type="text" name="codigo_compra" id="venda_codigo" class="form-control" placeholder="Ex: A-101">
+                        </div>
+                        <div class="col-md-5">
+                            <label class="form-label small fw-bold">Empreendimento (Empresa)</label>
+                            <input type="text" name="nome_empresa" id="venda_empresa" class="form-control" required placeholder="Ex: RESIDENCIAL FLORES">
+                        </div>
+                        
+                        <div class="col-md-4">
+                            <label class="form-label small fw-bold text-primary">Responsável Venda</label>
+                            <input type="text" name="responsavel" id="venda_responsavel" class="form-control" placeholder="Quem fechou?">
+                        </div>
+
+                        <div class="col-md-4">
+                            <label class="form-label small fw-bold">Lote / Casa / Unidade</label>
+                            <input type="text" name="nome_casa" id="venda_casa" class="form-control" placeholder="Ex: Lote 15 Q. 2">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small fw-bold">Data Contrato</label>
+                            <input type="date" name="data_contrato" id="venda_data" class="form-control" required>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small fw-bold">Valor Total (R$)</label>
+                            <input type="text" name="valor_total" id="venda_valor" class="form-control fw-bold" required placeholder="0,00">
+                        </div>
+
+                        <div class="col-md-12">
+                            <hr class="my-2">
+                            <small class="text-muted">Datas de Vigência (Opcional)</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label small">Início</label>
+                            <input type="date" name="data_inicio" id="venda_ini" class="form-control">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label small">Fim</label>
+                            <input type="date" name="data_fim" id="venda_fim" class="form-control">
+                        </div>
                     </div>
                 </div>
-                <div class="modal-footer py-1"><button type="submit" class="btn btn-primary btn-sm fw-bold">SALVAR</button></div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-success fw-bold">SALVAR CONTRATO</button>
+                </div>
             </form>
         </div>
     </div>
 </div>
 
 <div class="modal fade" id="modalParcela" tabindex="-1">
-    <div class="modal-dialog modal-sm">
+    <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header bg-dark text-white py-2"><h6 class="modal-title">Parcela</h6><button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button></div>
+            <div class="modal-header bg-secondary text-white">
+                <h5 class="modal-title">Lançar Parcela</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
             <form action="actions/salvar_parcela.php" method="POST">
-                <div class="modal-body p-3">
-                    <input type="hidden" name="id" id="parc_id">
-                    <input type="hidden" name="venda_id" id="parc_venda_id">
-                    <input type="hidden" name="cliente_id" value="<?php echo $id_cliente; ?>">
-                    <div class="row g-2">
-                        <div class="col-4"><label class="small fw-bold">Nº</label><input type="number" name="numero_parcela" id="parc_num" class="form-control form-control-sm" required></div>
-                        <div class="col-8"><label class="small fw-bold">Vencimento</label><input type="date" name="data_vencimento" id="parc_venc" class="form-control form-control-sm" required></div>
-                        <div class="col-12"><label class="small fw-bold">Valor (R$)</label><input type="text" name="valor_parcela" id="parc_valor" class="form-control form-control-sm" required></div>
-                        <hr class="my-2"><h6 class="text-success small fw-bold m-0">Pagamento</h6>
-                        <div class="col-6"><label class="small fw-bold">Data</label><input type="date" name="data_pagamento" id="parc_dt_pag" class="form-control form-control-sm"></div>
-                        <div class="col-6"><label class="small fw-bold">Pago (R$)</label><input type="text" name="valor_pago" id="parc_vlr_pag" class="form-control form-control-sm"></div>
+                <input type="hidden" name="cliente_id" value="<?php echo $id_cliente; ?>">
+                <input type="hidden" name="venda_id" id="parc_venda_id">
+                <input type="hidden" name="id" id="parc_id">
+
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label class="form-label small fw-bold">Nº Parc</label>
+                            <input type="text" name="numero_parcela" id="parc_num" class="form-control" required>
+                        </div>
+                        <div class="col-md-8">
+                            <label class="form-label small fw-bold">Vencimento</label>
+                            <input type="date" name="data_vencimento" id="parc_venc" class="form-control" required>
+                        </div>
+                        <div class="col-md-12">
+                            <label class="form-label small fw-bold">Valor da Parcela (R$)</label>
+                            <input type="text" name="valor_parcela" id="parc_valor" class="form-control fw-bold fs-5" required placeholder="0,00">
+                        </div>
+                        
+                        <div class="col-12"><hr></div>
+                        <h6 class="text-success small fw-bold">BAIXA (PAGAMENTO)</h6>
+
+                        <div class="col-md-6">
+                            <label class="form-label small">Data Pagto</label>
+                            <input type="date" name="data_pagamento" id="parc_dt_pag" class="form-control">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label small">Valor Pago (R$)</label>
+                            <input type="text" name="valor_pago" id="parc_vlr_pag" class="form-control text-success fw-bold">
+                        </div>
                     </div>
                 </div>
-                <div class="modal-footer py-1"><button class="btn btn-success btn-sm w-100 fw-bold">SALVAR</button></div>
+                <div class="modal-footer">
+                    <button type="submit" class="btn btn-success w-100 fw-bold">SALVAR PARCELA</button>
+                </div>
             </form>
         </div>
     </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-
 <script>
-const fmtMoney = (v) => v ? new Intl.NumberFormat('pt-BR', {minimumFractionDigits: 2}).format(v) : '';
+// Formatador de dinheiro para visualização
+const fmtMoney = (v) => {
+    if(!v) return '';
+    return new Intl.NumberFormat('pt-BR', {minimumFractionDigits: 2}).format(v);
+}
 
+// -- AÇÕES CONTRATO --
 function novoContrato() {
-    $('#venda_id').val(''); $('#venda_codigo').val(''); $('#venda_casa').val(''); $('#venda_empresa').val('');
-    $('#venda_valor').val(''); $('#venda_dt_con').val(''); $('#venda_dt_ini').val(''); $('#venda_dt_fim').val('');
+    $('#venda_id').val(''); 
+    $('#venda_codigo').val('AUTO-' + Math.floor(Date.now() / 1000)); 
+    $('#venda_empresa').val('');
+    $('#venda_casa').val(''); 
+    $('#venda_responsavel').val(''); // Limpa o campo responsável
+    $('#venda_data').val(''); 
+    $('#venda_valor').val('');
     $('#tituloModalVenda').text('Novo Contrato');
     new bootstrap.Modal(document.getElementById('modalVenda')).show();
 }
+
 function editarContrato(d) {
-    $('#venda_id').val(d.id); $('#venda_codigo').val(d.codigo_compra);
-    $('#venda_casa').val(d.nome_casa); $('#venda_empresa').val(d.nome_empresa);
+    $('#venda_id').val(d.id); 
+    $('#venda_codigo').val(d.codigo_compra);
+    $('#venda_empresa').val(d.nome_empresa);
+    $('#venda_casa').val(d.nome_casa);
+    
+    // CARREGA O RESPONSÁVEL
+    $('#venda_responsavel').val(d.responsavel);
+    
+    $('#venda_data').val(d.data_contrato);
     $('#venda_valor').val(fmtMoney(d.valor_total));
-    $('#venda_dt_con').val(d.data_contrato); $('#venda_dt_ini').val(d.data_inicio); $('#venda_dt_fim').val(d.data_fim);
+    $('#venda_ini').val(d.data_inicio);
+    $('#venda_fim').val(d.data_fim);
+
     $('#tituloModalVenda').text('Editar Contrato');
     new bootstrap.Modal(document.getElementById('modalVenda')).show();
 }
-function novaParcela(vendaId) {
-    $('#parc_id').val(''); $('#parc_venda_id').val(vendaId);
-    $('#parc_num').val(''); $('#parc_venc').val(''); $('#parc_valor').val(''); 
-    $('#parc_dt_pag').val(''); $('#parc_vlr_pag').val('');
+
+function excluirContrato(id) {
+    if(confirm('ATENÇÃO: Isso apagará o contrato E TODAS AS PARCELAS dele.\nTem certeza absoluta?')) {
+        window.location.href = `actions/excluir_venda.php?id=${id}&cli=<?php echo $id_cliente; ?>`;
+    }
+}
+
+// -- AÇÕES PARCELA --
+function novaParcela(vid) {
+    $('#parc_id').val(''); 
+    $('#parc_venda_id').val(vid);
+    $('#parc_num').val(''); 
+    $('#parc_venc').val(''); 
+    $('#parc_valor').val(''); 
+    $('#parc_dt_pag').val(''); 
+    $('#parc_vlr_pag').val('');
     new bootstrap.Modal(document.getElementById('modalParcela')).show();
 }
+
 function editarParcela(d) {
-    $('#parc_id').val(d.id); $('#parc_venda_id').val(d.venda_id);
-    $('#parc_num').val(d.numero_parcela); $('#parc_venc').val(d.data_vencimento);
+    $('#parc_id').val(d.id);
+    $('#parc_venda_id').val(d.venda_id);
+    $('#parc_num').val(d.numero_parcela);
+    $('#parc_venc').val(d.data_vencimento);
     $('#parc_valor').val(fmtMoney(d.valor_parcela));
-    $('#parc_dt_pag').val(d.data_pagamento); $('#parc_vlr_pag').val(fmtMoney(d.valor_pago));
+    $('#parc_dt_pag').val(d.data_pagamento);
+    $('#parc_vlr_pag').val(fmtMoney(d.valor_pago));
     new bootstrap.Modal(document.getElementById('modalParcela')).show();
+}
+function excluirParcela(id) {
+    if(confirm('Excluir esta parcela?')) {
+        window.location.href = `actions/excluir_parcela.php?id=${id}&cli=<?php echo $id_cliente; ?>`;
+    }
 }
 </script>

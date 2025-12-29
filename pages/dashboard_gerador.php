@@ -1,5 +1,5 @@
 <?php
-// DASHBOARD GERADOR V28 - CORREÇÃO DE EXPORTAÇÃO (ANTI-BUG + TEMPO DE RENDER)
+// DASHBOARD GERADOR V35 - CORREÇÃO DE MESES (RÉGUA DE TEMPO COMPLETA)
 ini_set('display_errors', 0); 
 error_reporting(E_ALL);
 set_time_limit(300);
@@ -146,7 +146,9 @@ if (isset($_POST['acao']) && $_POST['acao'] == 'gerar_dados') {
         $sql = "SELECT " . implode(', ', $selects) . " FROM $tabela $joins $where";
         if($groupBy) $sql .= " GROUP BY $groupBy";
         if($orderBy) $sql .= " ORDER BY $orderBy";
-        if($dimensao != 'resumo') $sql .= $sql_limit;
+        
+        // **CORREÇÃO IMPORTANTE**: NÃO limitar se for por tempo (mes), senão corta Dezembro!
+        if($dimensao != 'resumo' && $dimensao != 'mes') $sql .= $sql_limit;
 
         $stmt = $pdo->prepare($sql);
         $stmt->execute($params);
@@ -154,13 +156,56 @@ if (isset($_POST['acao']) && $_POST['acao'] == 'gerar_dados') {
 
         $labels = [];
         $datasets = [];
-        foreach ($metricas as $k => $m) {
-            $datasets[$k] = ['label' => getLabelMetrica($m), 'data' => []];
-        }
-        foreach ($dados as $row) {
-            $labels[] = $row['label'];
+
+        // --- LÓGICA DE PREENCHIMENTO DE MESES VAZIOS ---
+        if ($dimensao == 'mes') {
+            // 1. Indexa o que veio do banco
+            $mapaDados = [];
+            foreach ($dados as $row) {
+                $mapaDados[$row['label']] = $row;
+            }
+
+            // 2. Prepara os datasets vazios
             foreach ($metricas as $k => $m) {
-                $datasets[$k]['data'][] = (float)$row['val_' . $k];
+                $datasets[$k] = ['label' => getLabelMetrica($m), 'data' => []];
+            }
+
+            // 3. Loop mês a mês (Régua de tempo)
+            $atual = new DateTime(!empty($dt_ini) ? $dt_ini : date('Y-01-01'));
+            $atual->modify('first day of this month');
+            
+            $final = new DateTime(!empty($dt_fim) ? $dt_fim : date('Y-12-31'));
+            $final->modify('last day of this month');
+
+            while ($atual <= $final) {
+                $lbl = $atual->format('m/Y'); // Ex: 01/2025
+                $labels[] = $lbl;
+
+                if (isset($mapaDados[$lbl])) {
+                    // Tem dados nesse mês
+                    foreach ($metricas as $k => $m) {
+                        $datasets[$k]['data'][] = (float)$mapaDados[$lbl]['val_' . $k];
+                    }
+                } else {
+                    // Mês vazio (preenche com 0)
+                    foreach ($metricas as $k => $m) {
+                        $datasets[$k]['data'][] = 0;
+                    }
+                }
+                
+                $atual->modify('+1 month');
+            }
+
+        } else {
+            // Lógica Padrão (Sem preenchimento)
+            foreach ($metricas as $k => $m) {
+                $datasets[$k] = ['label' => getLabelMetrica($m), 'data' => []];
+            }
+            foreach ($dados as $row) {
+                $labels[] = $row['label'];
+                foreach ($metricas as $k => $m) {
+                    $datasets[$k]['data'][] = (float)$row['val_' . $k];
+                }
             }
         }
 
@@ -193,7 +238,6 @@ $lista_pagamentos = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos WH
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
     body { font-family: 'Inter', sans-serif; }
 
-    /* Card Premium */
     .premium-card {
         border: none; border-radius: 16px; background: #ffffff;
         box-shadow: 0 4px 20px rgba(0,0,0,0.06); transition: transform 0.2s;
@@ -219,8 +263,8 @@ $lista_pagamentos = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos WH
                 <button class="btn btn-primary btn-premium shadow-sm" onclick="abrirModalCriar()"><i class="bi bi-plus-lg me-1"></i> Novo</button>
                 <button class="btn btn-outline-danger btn-premium" onclick="limparTudo()"><i class="bi bi-trash"></i></button>
                 
-                <button id="btnExportar" onclick="exportarPPT_Blindado()" class="btn btn-warning btn-premium text-white shadow-sm">
-                    <span class="normal-text"><i class="bi bi-file-earmark-slides me-1"></i> Exportar PPT (4K)</span>
+                <button id="btnExportar" onclick="exportarPPT_4K()" class="btn btn-warning btn-premium text-white shadow-sm">
+                    <span class="normal-text"><i class="bi bi-file-earmark-slides me-1"></i> PPT Ultra HD</span>
                     <span class="loading-text d-none"><span class="spinner-border spinner-border-sm" role="status"></span> Gerando...</span>
                 </button>
             </div>
@@ -338,7 +382,6 @@ $lista_pagamentos = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos WH
 <script src="https://cdn.jsdelivr.net/gh/gitbrent/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
 
 <script>
-// Configuração Segura
 Chart.register(ChartDataLabels);
 Chart.defaults.font.family = "'Inter', sans-serif";
 Chart.defaults.color = '#4a5568';
@@ -351,7 +394,7 @@ const opcoes = {
     contrato: { dim: [{v:'responsavel',t:'👤 RESPONSÁVEL'},{v:'mes',t:'📅 EVOLUÇÃO'}], met: [{v:'con_total',t:'Valor Contrato'}], filtro: [] }
 };
 
-const STORAGE_KEY = 'gestao_obras_v28';
+const STORAGE_KEY = 'gestao_obras_v29';
 
 $(document).ready(function() { restaurarDashboard(); });
 
@@ -409,7 +452,7 @@ function hexToRgb(hex) {
 
 function generatePalette(baseColor, count) {
     let rgb = hexToRgb(baseColor);
-    if (!rgb) rgb = {r:13, g:110, b:253}; // Fallback Azul
+    if (!rgb) rgb = {r:13, g:110, b:253}; // Fallback
     let palette = [baseColor];
     for (let i = 1; i < count; i++) {
         let factor = i * 0.15;
@@ -447,7 +490,6 @@ function renderizarCard(config, dados) {
         const isPie = (config.grafico === 'pie' || config.grafico === 'doughnut');
         const finalColorHex = isPie ? baseColors : baseColors[i % baseColors.length];
         
-        // Cores seguras para renderização
         let bgColors, borderColors;
         if(Array.isArray(finalColorHex)) {
              bgColors = finalColorHex.map(c => { let rgb = hexToRgb(c) || {r:0,g:0,b:0}; return `rgba(${rgb.r},${rgb.g},${rgb.b},0.85)`; });
@@ -508,8 +550,8 @@ function deletarGrafico(id) { if(confirm('Remover?')) { $('#card_'+id).remove();
 function limparTudo() { if(confirm('Limpar?')) { $('.chart-wrapper').remove(); localStorage.removeItem(STORAGE_KEY); $('#placeholder-vazio').show(); } }
 function restaurarDashboard() { let l = JSON.parse(localStorage.getItem(STORAGE_KEY)||'[]'); if(l.length>0) { $('#placeholder-vazio').hide(); l.forEach(c => solicitarDadosERenderizar(c)); } }
 
-// --- EXPORTAR PPT BLINDADO (WAIT + RENDER) ---
-async function exportarPPT_Blindado() {
+// --- EXPORTAR PPT ULTRA HD (4K + 500MS WAIT) ---
+async function exportarPPT_4K() {
     $('#btnExportar .normal-text').addClass('d-none');
     $('#btnExportar .loading-text').removeClass('d-none');
     
@@ -523,7 +565,7 @@ async function exportarPPT_Blindado() {
         return; 
     }
 
-    const SCALE = 3; // 4K Scale
+    const SCALE = 4; // Resolução 4X (Ultra HD)
 
     for (let i = 0; i < canvases.length; i++) {
         const canvas = canvases[i];
@@ -536,29 +578,30 @@ async function exportarPPT_Blindado() {
                     const origW = canvas.width; const origH = canvas.height;
                     const oldSize = chart.options.plugins.datalabels.font.size || 12;
                     const oldLeg = chart.options.plugins.legend.labels.font.size || 11;
-                    const oldAnim = chart.options.animation; // Salva animação
+                    const oldAnim = chart.options.animation; 
 
-                    // 1. DESATIVA ANIMAÇÃO (Para exportar instantâneo)
+                    // 1. Desativa Animação
                     chart.options.animation = false;
 
-                    // 2. AUMENTA (HD)
+                    // 2. Escala 4x
                     canvas.style.width = (canvas.parentElement.offsetWidth) + 'px';
                     canvas.style.height = (canvas.parentElement.offsetHeight) + 'px';
                     chart.resize(origW * SCALE, origH * SCALE);
 
-                    // 3. ZOOM NAS FONTES
-                    chart.options.plugins.datalabels.font.size = oldSize * (SCALE * 0.85);
+                    // 3. Zoom Fontes (Proporcional para 4x)
+                    // Multiplicador 1.0 mantém a proporção exata visual.
+                    chart.options.plugins.datalabels.font.size = oldSize * SCALE;
                     chart.options.plugins.legend.labels.font.size = oldLeg * SCALE;
                     
                     chart.update(); 
                     
-                    // 4. PAUSA IMPORTANTE (Espera o navegador desenhar os pixels)
-                    await new Promise(r => setTimeout(r, 300));
+                    // 4. Pausa de Render (500ms para evitar slide branco)
+                    await new Promise(r => setTimeout(r, 500));
 
-                    // 5. CAPTURA
+                    // 5. Captura
                     imgData = canvas.toDataURL('image/png', 1.0);
 
-                    // 6. RESTAURA (Bloco Seguro)
+                    // 6. Restaura
                     chart.options.animation = oldAnim;
                     chart.options.plugins.datalabels.font.size = oldSize;
                     chart.options.plugins.legend.labels.font.size = oldLeg;
@@ -576,9 +619,8 @@ async function exportarPPT_Blindado() {
         }
     }
     
-    pptx.writeFile({ fileName: "Relatorio_Premium_4K.pptx" });
+    pptx.writeFile({ fileName: "Relatorio_Premium_UltraHD.pptx" });
     
-    // Restaura Botão
     $('#btnExportar .normal-text').removeClass('d-none');
     $('#btnExportar .loading-text').addClass('d-none');
 }

@@ -1,5 +1,5 @@
 <?php
-// GESTÃO DE FORNECEDORES (FINANCEIRO + BOTÃO LISTA GERAL)
+// GESTÃO DE FORNECEDORES V3 (CORREÇÃO VISUALIZAÇÃO NOVOS CADASTROS)
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 
@@ -13,14 +13,28 @@ $dt_fim = $_GET['dt_fim'] ?? date('Y-12-31');
 $filtro_obra = $_GET['filtro_obra'] ?? '';
 $filtro_pag = $_GET['filtro_pag'] ?? '';
 
-// --- 3. CONSULTA SQL INTELIGENTE ---
-$where = "WHERE 1=1";
+// --- 3. CONSULTA SQL INTELIGENTE (CORRIGIDA) ---
+// Em vez de WHERE global, usamos condições específicas para o JOIN dos pedidos
+// Isso garante que o fornecedor apareça mesmo se não tiver pedidos no filtro selecionado
+$join_conditions = "";
 $params = [];
 
-if (!empty($dt_ini)) { $where .= " AND p.data_pedido >= ?"; $params[] = $dt_ini; }
-if (!empty($dt_fim)) { $where .= " AND p.data_pedido <= ?"; $params[] = $dt_fim; }
-if (!empty($filtro_obra)) { $where .= " AND p.obra_id = ?"; $params[] = $filtro_obra; }
-if (!empty($filtro_pag)) { $where .= " AND p.forma_pagamento = ?"; $params[] = $filtro_pag; }
+if (!empty($dt_ini)) { 
+    $join_conditions .= " AND p.data_pedido >= ?"; 
+    $params[] = $dt_ini; 
+}
+if (!empty($dt_fim)) { 
+    $join_conditions .= " AND p.data_pedido <= ?"; 
+    $params[] = $dt_fim; 
+}
+if (!empty($filtro_obra)) { 
+    $join_conditions .= " AND p.obra_id = ?"; 
+    $params[] = $filtro_obra; 
+}
+if (!empty($filtro_pag)) { 
+    $join_conditions .= " AND p.forma_pagamento = ?"; 
+    $params[] = $filtro_pag; 
+}
 
 $sql = "SELECT 
             f.id, 
@@ -28,18 +42,18 @@ $sql = "SELECT
             f.cnpj_cpf, 
             
             -- CÁLCULOS FINANCEIROS (PEDIDOS)
-            SUM(p.valor_bruto_pedido) as total_pedido,
-            SUM(p.valor_total_rec) as total_executado,
+            -- COALESCE garante que se for nulo vire 0
+            COALESCE(SUM(p.valor_bruto_pedido), 0) as total_pedido,
+            COALESCE(SUM(p.valor_total_rec), 0) as total_executado,
             
             -- Última movimentação
             MAX(p.data_pedido) as ultimo_pedido
 
         FROM fornecedores f
-        LEFT JOIN pedidos p ON p.fornecedor_id = f.id
-        $where
+        LEFT JOIN pedidos p ON p.fornecedor_id = f.id $join_conditions
         GROUP BY f.id
-        HAVING total_pedido > 0
-        ORDER BY total_pedido DESC"; 
+        -- REMOVIDO O 'HAVING > 0' PARA MOSTRAR OS NOVOS
+        ORDER BY total_pedido DESC, f.nome ASC"; 
 
 try {
     $stmt = $pdo->prepare($sql);
@@ -76,7 +90,7 @@ $kpi_saldo = $kpi_bruto - $kpi_executado;
             <i class="bi bi-list-ul"></i> Lista Geral
         </a>
 
-        <a href="index.php?page=importar_mestre_xlsx" class="btn btn-dark btn-sm shadow-sm">
+        <a href="index.php?page=importar_contratos" class="btn btn-dark btn-sm shadow-sm">
             <i class="bi bi-cloud-arrow-up"></i> Importar
         </a>
         
@@ -175,6 +189,15 @@ $kpi_saldo = $kpi_bruto - $kpi_executado;
     </div>
 </div>
 
+<div class="row mb-3">
+    <div class="col-12">
+        <div class="input-group shadow-sm">
+            <span class="input-group-text bg-white border-end-0"><i class="bi bi-search text-muted"></i></span>
+            <input type="text" id="filtroInput" class="form-control border-start-0" placeholder="Digite para buscar um fornecedor na tela...">
+        </div>
+    </div>
+</div>
+
 <div class="row" id="listaFornecedores">
     
     <?php if(empty($fornecedores)): ?>
@@ -185,7 +208,12 @@ $kpi_saldo = $kpi_bruto - $kpi_executado;
 
     <?php foreach($fornecedores as $f): 
         $saldo = $f['total_pedido'] - $f['total_executado'];
-        $cor = ($saldo > 0) ? 'warning' : 'success';
+        // Se saldo for 0 e total pedido for 0 (novo cadastro), usa cor neutra
+        if ($f['total_pedido'] == 0) {
+            $cor = 'secondary';
+        } else {
+            $cor = ($saldo > 0) ? 'warning' : 'success';
+        }
         $textoBusca = strtolower($f['nome'] . ' ' . $f['cnpj_cpf']);
     ?>
     
@@ -223,10 +251,6 @@ $kpi_saldo = $kpi_bruto - $kpi_executado;
         </div>
     </div>
     <?php endforeach; ?>
-</div>
-
-<div class="mb-4">
-    <input type="text" id="filtroInput" class="form-control" placeholder="🔍 Digite para buscar um fornecedor na tela...">
 </div>
 
 <script>

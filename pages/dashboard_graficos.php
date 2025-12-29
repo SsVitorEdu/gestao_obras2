@@ -1,5 +1,5 @@
 <?php
-// DASHBOARD GRÁFICOS (V5 - ANTI-TRAVAMENTO)
+// DASHBOARD GRÁFICOS (V8 - LAYOUT VERTICAL COMPLETO)
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 set_time_limit(300);
@@ -9,9 +9,9 @@ if (!isset($pdo)) {
     $db_file = __DIR__ . '/../includes/db.php';
     if (file_exists($db_file)) include $db_file;
 }
-// Garante UTF-8 para não quebrar JSON
 $pdo->exec("SET NAMES utf8mb4");
 
+// Filtros
 $where_pedidos = "WHERE 1=1";
 $params_pedidos = [];
 $where_contratos = "WHERE 1=1"; 
@@ -20,7 +20,7 @@ $params_contratos = [];
 $dt_ini = $_GET['dt_ini'] ?? date('Y-01-01');
 $dt_fim = $_GET['dt_fim'] ?? date('Y-12-31');
 
-// Filtro Data (Só Pedidos)
+// Filtro Data
 if (!empty($dt_ini)) { $where_pedidos .= " AND p.data_pedido >= ?"; $params_pedidos[] = $dt_ini; }
 if (!empty($dt_fim)) { $where_pedidos .= " AND p.data_pedido <= ?"; $params_pedidos[] = $dt_fim; }
 
@@ -58,7 +58,6 @@ if (!function_exists('montarDatasetStacked')) {
             foreach ($eixo_principal_labels as $label_principal) {
                 $valor = 0;
                 foreach ($dados_detalhados as $item) {
-                    // Comparação frouxa (==) para evitar erro de tipo string/int
                     if ($item[$eixo_primario_bd] == $label_principal && $item[$coluna_stack] == $stack_label) {
                         $valor = $item[$coluna_valor]; break;
                     }
@@ -74,23 +73,42 @@ if (!function_exists('montarDatasetStacked')) {
 
 // --- 3. DADOS SQL ---
 
+// G0: VISÃO GLOBAL (CONTRATO vs CONSUMO)
+$stmt = $pdo->prepare("SELECT SUM(c.valor) as total FROM contratos c $where_contratos");
+$stmt->execute($params_contratos);
+$row_con = $stmt->fetch();
+$total_contratos = $row_con['total'] ?? 0;
+
+$stmt = $pdo->prepare("SELECT SUM(p.valor_bruto_pedido) as total FROM pedidos p $where_pedidos");
+$stmt->execute($params_pedidos);
+$row_ped = $stmt->fetch();
+$total_consumido = $row_ped['total'] ?? 0;
+
+$saldo_contrato = $total_contratos - $total_consumido;
+
+$dados_global = [
+    ['label' => 'TOTAL CONTRATOS', 'total' => $total_contratos],
+    ['label' => 'CONSUMO ACUMULADO', 'total' => $total_consumido],
+    ['label' => 'SALDO', 'total' => $saldo_contrato]
+];
+
 // G1: RESUMO FINANCEIRO
 $stmt = $pdo->prepare("SELECT SUM(p.valor_bruto_pedido) as bruto, SUM(p.valor_total_rec) as executado FROM pedidos p $where_pedidos");
 $stmt->execute($params_pedidos); $fin = $stmt->fetch(PDO::FETCH_ASSOC);
-$dados_fin_s = [['label' => 'VALOR BRUTO', 'total' => $fin['bruto']??0], ['label' => 'TOTAL EXECUTADO', 'total' => $fin['executado']??0], ['label' => 'SALDO A EXECUTAR', 'total' => ($fin['bruto']??0) - ($fin['executado']??0)]];
+$dados_fin_s = [['label' => 'VALOR BRUTO', 'total' => $fin['bruto']??0], ['label' => 'TOTAL RECEBIDO', 'total' => $fin['executado']??0], ['label' => 'SALDO A RECEBER', 'total' => ($fin['bruto']??0) - ($fin['executado']??0)]];
 
 $sql_fin_det = "SELECT 'VALOR BRUTO' as label, f.nome as item_detalhe, SUM(p.valor_bruto_pedido) as total FROM pedidos p JOIN fornecedores f ON p.fornecedor_id = f.id $where_pedidos GROUP BY f.nome
-    UNION ALL SELECT 'TOTAL EXECUTADO' as label, f.nome as item_detalhe, SUM(p.valor_total_rec) as total FROM pedidos p JOIN fornecedores f ON p.fornecedor_id = f.id $where_pedidos GROUP BY f.nome
-    UNION ALL SELECT 'SALDO A EXECUTAR' as label, f.nome as item_detalhe, SUM(p.valor_bruto_pedido - p.valor_total_rec) as total FROM pedidos p JOIN fornecedores f ON p.fornecedor_id = f.id $where_pedidos GROUP BY f.nome";
+    UNION ALL SELECT 'TOTAL PAGO' as label, f.nome as item_detalhe, SUM(p.valor_total_rec) as total FROM pedidos p JOIN fornecedores f ON p.fornecedor_id = f.id $where_pedidos GROUP BY f.nome
+    UNION ALL SELECT 'A PAGAR' as label, f.nome as item_detalhe, SUM(p.valor_bruto_pedido - p.valor_total_rec) as total FROM pedidos p JOIN fornecedores f ON p.fornecedor_id = f.id $where_pedidos GROUP BY f.nome";
 $stmt = $pdo->prepare($sql_fin_det); $stmt->execute(array_merge($params_pedidos, $params_pedidos, $params_pedidos)); $raw_fin_det = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// G2: PAGAMENTO (PIZZA)
+// G2: PAGAMENTO
 $stmt = $pdo->prepare("SELECT forma_pagamento as label, SUM(valor_bruto_pedido) as total FROM pedidos p $where_pedidos AND p.forma_pagamento != '' GROUP BY forma_pagamento ORDER BY total DESC");
 $stmt->execute($params_pedidos); $dados_pag = $stmt->fetchAll(PDO::FETCH_ASSOC);
 $stmt = $pdo->prepare("SELECT p.forma_pagamento as label, f.nome as item_detalhe, SUM(p.valor_bruto_pedido) as total FROM pedidos p JOIN fornecedores f ON p.fornecedor_id = f.id $where_pedidos AND p.forma_pagamento != '' GROUP BY p.forma_pagamento, f.nome");
 $stmt->execute($params_pedidos); $raw_pag_det = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// G3: CONTRATOS (ROBUSTO)
+// G3: CONTRATOS POR RESPONSÁVEL
 try {
     $check = $pdo->query("SHOW TABLES LIKE 'contratos'");
     if($check->rowCount() > 0) {
@@ -111,30 +129,24 @@ $stmt = $pdo->prepare("SELECT f.nome as label, DATE_FORMAT(p.data_pedido, '%m/%Y
 $stmt->execute($params_pedidos); $raw_forn_det = $stmt->fetchAll(PDO::FETCH_ASSOC);
 $altura_forn_px = max(500, count($dados_forn) * 45);
 
-// --- 4. PREPARAR JSON (COM CORES PARA PIZZA) ---
+// --- 4. PREPARAR JSON ---
 if (!function_exists('prepSimpleG')) { 
     function prepSimpleG($data, $colors=null) {
-        // Se colors for null e for pizza, gera cores
         if(!$colors) $colors = '#0d6efd';
         return ['labels' => array_column($data, 'label'), 'datasets' => [['label' => 'Total', 'data' => array_column($data, 'total'), 'backgroundColor' => $colors, 'borderRadius' => 4]]]; 
     } 
 }
 if (!function_exists('prepDetailedG')) { function prepDetailedG($rawData, $baseData) { return ['labels' => array_column($baseData, 'label'), 'datasets' => montarDatasetStacked($rawData, array_column($baseData, 'label'), 'item_detalhe', 'total', 'label')]; } }
 
-// G1: Resumo
-$js_fin_s = prepSimpleG($dados_fin_s, ['#0d6efd', '#198754', '#dc3545']); 
+// Cores
+$js_global = prepSimpleG($dados_global, ['#0d6efd', '#010a6aff', '#00c3ffff']);
+$js_fin_s = prepSimpleG($dados_fin_s, ['#0d6efd', '#131b93ff', '#dc3545']); 
 $js_fin_d = prepDetailedG($raw_fin_det, $dados_fin_s);
-
-// G2: Pagamento (AGORA TEM ARRAY DE CORES PARA NÃO TRAVAR)
 $cores_pizza = ['#6610f2', '#d63384', '#fd7e14', '#ffc107', '#198754', '#20c997', '#0dcaf0', '#0d6efd'];
 $js_pag_s = prepSimpleG($dados_pag, $cores_pizza); 
 $js_pag_d = prepDetailedG($raw_pag_det, $dados_pag);
-
-// G3: Contratos
-$js_resp_s = prepSimpleG($dados_resp, '#ffc107'); 
+$js_resp_s = prepSimpleG($dados_resp, '#0c1dd7ff'); 
 $js_resp_d = prepDetailedG($raw_resp_det, $dados_resp);
-
-// G4: Fornecedores
 $js_forn_s = prepSimpleG($dados_forn, '#0d6efd'); 
 $js_forn_d = prepDetailedG($raw_forn_det, $dados_forn);
 
@@ -166,45 +178,64 @@ $pag_list = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos WHERE form
         </div>
     </div>
 
-    <div class="card shadow border-0 mb-4">
+    <div class="card shadow border-0 mb-4 border-start border-5 border-primary">
         <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
-            <h5 class="fw-bold text-dark m-0">RESUMO FINANCEIRO <span id="info_chartFin_G" class="badge bg-light text-secondary border ms-2 fw-normal" style="font-size: 0.8rem;"></span></h5>
+            <h5 class="fw-bold text-dark m-0"><i class="bi bi-bar-chart-line-fill text-primary me-2"></i>RESUMO FINANCEIRO (PEDIDOS)</h5>
             <div class="d-flex align-items-center gap-2">
-                <div class="form-check form-switch m-0 pt-1 me-3"><input class="form-check-input" type="checkbox" id="swFin_G" onchange="toggleChart_G('chartFin_G', 'swFin_G', 'containerFin_G')"><label class="form-check-label small fw-bold text-muted">DETALHAR</label></div>
+                <div class="form-check form-switch m-0 pt-1 me-3"><input class="form-check-input" type="checkbox" id="swFin_G" onchange="toggleChart_G('chartFin_G', 'swFin_G')"><label class="form-check-label small fw-bold text-muted">DETALHE</label></div>
+                <div class="btn-group btn-group-sm me-1"><button type="button" class="btn btn-outline-secondary" onclick="mudarAltura_G('containerFin_G', -100)"><i class="bi bi-dash-lg"></i></button><button type="button" class="btn btn-outline-secondary" onclick="mudarAltura_G('containerFin_G', 100)"><i class="bi bi-plus-lg"></i></button></div>
                 <button class="btn btn-light btn-sm border" onclick="expandirGrafico_G('chartFin_G', 'RESUMO FINANCEIRO')"><i class="bi bi-arrows-fullscreen"></i></button>
                 <button class="btn btn-light btn-sm border" onclick="$('#bodyFin_G').slideToggle()"><i class="bi bi-eye-slash"></i></button>
             </div>
         </div>
-        <div class="card-body" id="bodyFin_G"><div id="containerFin_G" style="height: 400px; transition: height 0.3s ease;"><canvas id="chartFin_G"></canvas></div></div>
+        <div class="card-body" id="bodyFin_G"><div id="containerFin_G" style="height: 350px; transition: height 0.3s ease;"><canvas id="chartFin_G"></canvas></div></div>
     </div>
 
-    <div class="card shadow border-0 mb-4">
+    <div class="card shadow border-0 mb-4 border-start border-5 border-warning">
         <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
-            <h5 class="fw-bold text-dark m-0">FORMA DE PAGAMENTO (R$) <span id="info_chartPag_G" class="badge bg-light text-secondary border ms-2 fw-normal" style="font-size: 0.8rem;"></span></h5>
+            <div>
+                <h5 class="fw-bold text-dark m-0"><i class="bi bi-speedometer2 text-warning me-2"></i>VISÃO GLOBAL (CONTRATOS vs CONSUMO)</h5>
+                <small class="text-muted">Teto Contratual x Pedidos Realizados</small>
+            </div>
             <div class="d-flex align-items-center gap-2">
-                <div class="form-check form-switch m-0 pt-1 me-3"><input class="form-check-input" type="checkbox" id="swPag_G" onchange="toggleChart_G('chartPag_G', 'swPag_G', 'containerPag_G')"><label class="form-check-label small fw-bold text-muted">DETALHAR</label></div>
+                <h5 class="fw-bold text-primary m-0 me-3"><span id="info_chartGlobal_G"></span></h5>
+                <div class="btn-group btn-group-sm me-1"><button type="button" class="btn btn-outline-secondary" onclick="mudarAltura_G('containerGlobal_G', -100)"><i class="bi bi-dash-lg"></i></button><button type="button" class="btn btn-outline-secondary" onclick="mudarAltura_G('containerGlobal_G', 100)"><i class="bi bi-plus-lg"></i></button></div>
+                <button class="btn btn-light btn-sm border" onclick="expandirGrafico_G('chartGlobal_G', 'VISÃO GLOBAL')"><i class="bi bi-arrows-fullscreen"></i></button>
+                <button class="btn btn-light btn-sm border" onclick="$('#bodyGlobal_G').slideToggle()"><i class="bi bi-eye-slash"></i></button>
+            </div>
+        </div>
+        <div class="card-body" id="bodyGlobal_G"><div id="containerGlobal_G" style="height: 350px; transition: height 0.3s ease;"><canvas id="chartGlobal_G"></canvas></div></div>
+    </div>
+
+    <div class="card shadow border-0 mb-4 border-start border-5 border-info">
+        <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+             <h5 class="fw-bold text-dark m-0"><i class="bi bi-people-fill text-info me-2"></i>CONTRATOS POR RESPONSÁVEL</h5>
+             <div class="d-flex align-items-center gap-2">
+                <div class="form-check form-switch m-0 pt-1 me-3"><input class="form-check-input" type="checkbox" id="swResp_G" onchange="toggleChart_G('chartResp_G', 'swResp_G')"><label class="form-check-label small fw-bold text-muted">POR FORNECEDOR</label></div>
+                <div class="btn-group btn-group-sm me-1"><button type="button" class="btn btn-outline-secondary" onclick="mudarAltura_G('containerResp_G', -100)"><i class="bi bi-dash-lg"></i></button><button type="button" class="btn btn-outline-secondary" onclick="mudarAltura_G('containerResp_G', 100)"><i class="bi bi-plus-lg"></i></button></div>
+                <button class="btn btn-light btn-sm border" onclick="expandirGrafico_G('chartResp_G', 'CONTRATOS POR RESPONSÁVEL')"><i class="bi bi-arrows-fullscreen"></i></button>
+                <button class="btn btn-light btn-sm border" onclick="$('#bodyResp_G').slideToggle()"><i class="bi bi-eye-slash"></i></button>
+             </div>
+        </div>
+        <div class="card-body" id="bodyResp_G"><div id="containerResp_G" style="height: 350px; transition: height 0.3s ease;"><canvas id="chartResp_G"></canvas></div></div>
+    </div>
+
+    <div class="card shadow border-0 mb-4 border-start border-5 border-success">
+        <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+            <h5 class="fw-bold text-dark m-0"><i class="bi bi-pie-chart-fill text-success me-2"></i>FORMA DE PAGAMENTO</h5>
+            <div class="d-flex align-items-center gap-2">
+                <div class="form-check form-switch m-0 pt-1 me-3"><input class="form-check-input" type="checkbox" id="swPag_G" onchange="toggleChart_G('chartPag_G', 'swPag_G')"><label class="form-check-label small fw-bold text-muted">DETALHE</label></div>
+                <div class="btn-group btn-group-sm me-1"><button type="button" class="btn btn-outline-secondary" onclick="mudarAltura_G('containerPag_G', -100)"><i class="bi bi-dash-lg"></i></button><button type="button" class="btn btn-outline-secondary" onclick="mudarAltura_G('containerPag_G', 100)"><i class="bi bi-plus-lg"></i></button></div>
                 <button class="btn btn-light btn-sm border" onclick="expandirGrafico_G('chartPag_G', 'FORMA DE PAGAMENTO')"><i class="bi bi-arrows-fullscreen"></i></button>
                 <button class="btn btn-light btn-sm border" onclick="$('#bodyPag_G').slideToggle()"><i class="bi bi-eye-slash"></i></button>
             </div>
         </div>
-        <div class="card-body" id="bodyPag_G"><div id="containerPag_G" style="height: 400px;"><canvas id="chartPag_G"></canvas></div></div>
+        <div class="card-body" id="bodyPag_G"><div id="containerPag_G" style="height: 350px; transition: height 0.3s ease;"><canvas id="chartPag_G"></canvas></div></div>
     </div>
 
-    <div class="card shadow border-0 mb-4">
+    <div class="card shadow border-0 mb-4 border-start border-5 border-danger">
         <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
-             <h5 class="fw-bold text-dark m-0">CONTRATOS POR RESPONSÁVEL <span id="info_chartResp_G" class="badge bg-light text-secondary border ms-2 fw-normal" style="font-size: 0.8rem;"></span></h5>
-             <div class="d-flex align-items-center gap-2">
-                <div class="form-check form-switch m-0 pt-1 me-3"><input class="form-check-input" type="checkbox" id="swResp_G" onchange="toggleChart_G('chartResp_G', 'swResp_G', 'containerResp_G')"><label class="form-check-label small fw-bold text-muted">POR FORNECEDOR</label></div>
-                <button class="btn btn-light btn-sm border" onclick="expandirGrafico_G('chartResp_G', 'CONTRATOS POR RESPONSÁVEL')"><i class="bi bi-arrows-fullscreen"></i></button>
-                <button class="btn btn-light btn-sm border" onclick="$('#bodyResp_G').slideToggle()"><i class="bi bi-eye-slash"></i></button>
-            </div>
-        </div>
-        <div class="card-body" id="bodyResp_G"><div id="containerResp_G" style="height: 400px;"><canvas id="chartResp_G"></canvas></div></div>
-    </div>
-
-    <div class="card shadow border-0 mb-4">
-        <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
-            <h5 class="fw-bold text-dark m-0">RANKING DE GASTO <span id="info_chartForn_G" class="badge bg-light text-secondary border ms-2 fw-normal" style="font-size: 0.8rem;"></span></h5>
+            <h5 class="fw-bold text-dark m-0"><i class="bi bi-list-ol text-danger me-2"></i>RANKING DE GASTO (FORNECEDORES)</h5>
             <div class="d-flex align-items-center gap-2">
                 <div class="form-check form-switch m-0 pt-1 me-3"><input class="form-check-input" type="checkbox" id="swForn_G" onchange="toggleChart_G('chartForn_G', 'swForn_G', 'containerForn_G')"><label class="form-check-label small fw-bold text-muted">POR MÊS</label></div>
                 <div class="btn-group btn-group-sm me-1"><button type="button" class="btn btn-outline-secondary" onclick="mudarAltura_G('containerForn_G', -200)"><i class="bi bi-dash-lg"></i></button><button type="button" class="btn btn-outline-secondary" onclick="mudarAltura_G('containerForn_G', 200)"><i class="bi bi-plus-lg"></i></button></div>
@@ -214,6 +245,7 @@ $pag_list = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos WHERE form
         </div>
         <div class="card-body" id="bodyForn_G"><div id="containerForn_G" style="height: <?php echo $altura_forn_px; ?>px; transition: height 0.3s ease;"><canvas id="chartForn_G"></canvas></div></div>
     </div>
+
 </div>
 
 <div class="modal fade" id="modalGrafico_G" tabindex="-1" aria-hidden="true">
@@ -229,6 +261,7 @@ $pag_list = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos WHERE form
     Chart.defaults.font.family = "'Segoe UI', sans-serif";
 
     window.chartDataStore_G = {
+        'chartGlobal_G': { type: 'bar', simple: <?php echo json_encode($js_global, JSON_UNESCAPED_UNICODE); ?>, options: { } },
         'chartFin_G': { type: 'bar', simple: <?php echo json_encode($js_fin_s, JSON_UNESCAPED_UNICODE); ?>, detailed: <?php echo json_encode($js_fin_d, JSON_UNESCAPED_UNICODE); ?>, options: { scales: { x: { stacked: false }, y: { stacked: false } } } },
         'chartPag_G': { type: 'pie', simple: <?php echo json_encode($js_pag_s, JSON_UNESCAPED_UNICODE); ?>, detailed: <?php echo json_encode($js_pag_d, JSON_UNESCAPED_UNICODE); ?>, options: { } },
         'chartResp_G': { type: 'bar', simple: <?php echo json_encode($js_resp_s, JSON_UNESCAPED_UNICODE); ?>, detailed: <?php echo json_encode($js_resp_d, JSON_UNESCAPED_UNICODE); ?>, options: { scales: { x: { stacked: false }, y: { stacked: false } } } },
@@ -236,21 +269,20 @@ $pag_list = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos WHERE form
     };
 
     window.chartInstances_G = {};
-    const ids_G = ['chartFin_G', 'chartPag_G', 'chartResp_G', 'chartForn_G'];
+    const ids_G = ['chartGlobal_G', 'chartFin_G', 'chartPag_G', 'chartResp_G', 'chartForn_G'];
 
     ids_G.forEach(id => {
         const ctx = document.getElementById(id);
         if(ctx) {
             try {
                 const store = window.chartDataStore_G[id];
-                // Verifica se tem dados para evitar crash
                 if(!store.simple || !store.simple.labels) return;
 
                 const baseOpts = {
                     responsive: true, maintainAspectRatio: false,
-                    layout: { padding: { top: 25, right: 20 } },
+                    layout: { padding: { top: 25, right: 30, left: 10 } },
                     plugins: {
-                        legend: { display: (store.type==='pie'||store.type==='doughnut'), position: 'bottom' },
+                        legend: { display: (store.type==='pie'), position: 'bottom' },
                         tooltip: { callbacks: { label: (c) => fmtBRL_G(c.raw) } },
                         datalabels: {
                             display: (ctx) => (ctx.chart.data.datasets.length < 3 && ctx.dataset.data[ctx.dataIndex] > 0),
@@ -258,27 +290,20 @@ $pag_list = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos WHERE form
                             align: (ctx) => (store.type==='pie') ? 'center' : 'end',
                             formatter: (val) => fmtCompact_G(val),
                             color: (ctx) => (store.type==='pie') ? '#fff' : '#444',
-                            font: { weight: 'bold' },
+                            font: { weight: 'bold', size: 11 },
                             offset: 4
                         }
                     },
                     scales: { y: { beginAtZero: true, grid: { color: '#f0f0f0' } }, x: { grid: { display: false } } }
                 };
 
-                // Ajustes específicos
-                if(id === 'chartForn_G') {
-                    baseOpts.indexAxis = 'y'; baseOpts.barPercentage = 0.8; baseOpts.scales = { x: { display: false }, y: { display: true } };
-                }
-                if(store.type === 'pie') {
-                    baseOpts.scales = { x: { display: false }, y: { display: false } };
-                }
+                if(id === 'chartForn_G') { baseOpts.indexAxis = 'y'; baseOpts.scales = { x: { display: false }, y: { display: true } }; }
+                if(store.type === 'pie') { baseOpts.scales = { x: { display: false }, y: { display: false } }; }
 
                 const finalOpts = { ...baseOpts, ...store.options };
                 window.chartInstances_G[id] = new Chart(ctx, { type: store.type, data: store.simple, options: finalOpts });
                 atualizarTotalVisual_G(id);
-            } catch(error) {
-                console.error("Erro ao criar gráfico " + id, error);
-            }
+            } catch(error) { console.error("Erro chart " + id, error); }
         }
     });
 
@@ -286,14 +311,13 @@ $pag_list = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos WHERE form
         if(!window.chartInstances_G[chartId]) return;
         let total = 0;
         const chart = window.chartInstances_G[chartId];
-        // Resumo: Pega só dataset[0] se simples
-        if(chartId === 'chartFin_G' && !document.getElementById('swFin_G').checked) {
-             total = Number(chart.data.datasets[0].data[0]); 
+        if(chartId === 'chartGlobal_G' || (chartId === 'chartFin_G' && !document.getElementById('swFin_G').checked)) {
+             // Lógica específica
         } else {
             chart.data.datasets.forEach(ds => { ds.data.forEach(val => total += Number(val)); });
         }
         const el = document.getElementById('info_' + chartId);
-        if(el) el.innerText = fmtCompact_G(total);
+        if(el && total > 0) el.innerText = fmtCompact_G(total);
     };
 
     window.mudarAltura_G = function(containerId, pixels) {
@@ -325,7 +349,6 @@ $pag_list = $pdo->query("SELECT DISTINCT forma_pagamento FROM pedidos WHERE form
             if(newType === 'pie') { newOptions.scales = { x: { display: false }, y: { display: false } }; }
 
             window.chartInstances_G[chartId] = new Chart(document.getElementById(chartId), { type: newType, data: newData, options: newOptions });
-            atualizarTotalVisual_G(chartId);
         } catch(e) { console.error(e); }
     };
 

@@ -1,5 +1,7 @@
 <?php
-// RELATÓRIO MESTRE IMOBILIÁRIO (FINANCEIRO GERAL)
+// pages/relatorio_master_imob.php
+// RELATÓRIO MESTRE IMOBILIÁRIO (FINANCEIRO GERAL) - VERSÃO FINAL "MÃE"
+// Funcionalidades: Cartões de Totais + Agrupamento + Responsável + Visual Construtora
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 set_time_limit(300);
@@ -8,20 +10,23 @@ set_time_limit(300);
 $where = "WHERE 1=1";
 $params = [];
 
-// Data (Padrão: Mês atual)
-$dt_tipo = $_GET['dt_tipo'] ?? 'vencimento'; // vencimento ou pagamento
-$dt_ini = $_GET['dt_ini'] ?? date('Y-m-01');
-$dt_fim = $_GET['dt_fim'] ?? date('Y-m-t');
+// Data
+$dt_tipo = $_GET['dt_tipo'] ?? 'vencimento'; // vencimento, pagamento ou todos
+$dt_ini  = $_GET['dt_ini'] ?? date('Y-m-01');
+$dt_fim  = $_GET['dt_fim'] ?? date('Y-m-t');
 
-if (!empty($dt_ini)) { 
-    $coluna_data = ($dt_tipo == 'pagamento') ? 'p.data_pagamento' : 'p.data_vencimento';
-    $where .= " AND $coluna_data >= ?"; 
-    $params[] = $dt_ini; 
-}
-if (!empty($dt_fim)) { 
-    $coluna_data = ($dt_tipo == 'pagamento') ? 'p.data_pagamento' : 'p.data_vencimento';
-    $where .= " AND $coluna_data <= ?"; 
-    $params[] = $dt_fim; 
+if (!empty($dt_ini) && !empty($dt_fim)) { 
+    if ($dt_tipo == 'todos') {
+        // Busca se Venceu OU se Pagou no período
+        $where .= " AND (p.data_vencimento BETWEEN ? AND ? OR p.data_pagamento BETWEEN ? AND ?)";
+        $params[] = $dt_ini; $params[] = $dt_fim;
+        $params[] = $dt_ini; $params[] = $dt_fim;
+    } else {
+        $coluna_data = ($dt_tipo == 'pagamento') ? 'p.data_pagamento' : 'p.data_vencimento';
+        $where .= " AND $coluna_data BETWEEN ? AND ?"; 
+        $params[] = $dt_ini; 
+        $params[] = $dt_fim; 
+    }
 }
 
 // Filtro por Empresa (Empreendimento)
@@ -31,17 +36,16 @@ if (!empty($filtro_empresa)) {
     $params[] = "%$filtro_empresa%";
 }
 
-// Filtro por Status
-$filtro_status = $_GET['filtro_status'] ?? '';
-// A lógica do status é feita no PHP ou via SQL complexo. Vamos filtrar no PHP para ser mais flexível visualmente, 
-// mas para performance em grandes bancos, o ideal seria no SQL.
+// Checkbox Agrupar
+$agrupar = isset($_GET['agrupar']) && $_GET['agrupar'] == 'sim';
 
-// --- 2. CONSULTA GERAL ---
+// --- 2. CONSULTA GERAL (SEMPRE TRAZ TUDO PARA CALCULAR OS TOTAIS CORRETAMENTE) ---
 $sql = "SELECT 
             p.*,
             v.codigo_compra,
             v.nome_casa,
             v.nome_empresa,
+            v.responsavel, /* NOVO CAMPO */
             c.nome as nome_cliente,
             c.cpf
         FROM parcelas_imob p
@@ -52,31 +56,69 @@ $sql = "SELECT
 
 $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
-$dados = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$dados_brutos = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// --- 3. CÁLCULOS DOS KPI's (INDICADORES) ---
+// --- 3. CÁLCULOS DOS KPI's (INDICADORES DO TOPO) ---
 $total_recebido = 0;
 $total_a_receber = 0;
 $total_atrasado = 0;
 $hoje = date('Y-m-d');
 
-foreach ($dados as $d) {
-    $vlr_orig = $d['valor_parcela'];
-    $vlr_pago = $d['valor_pago'];
-    $venc = $d['data_vencimento'];
-    
-    // Soma Recebido
-    $total_recebido += $vlr_pago;
+// Arrays para montar a tabela (Agrupada ou Detalhada)
+$dados_tabela = [];
 
-    // Lógica Atrasado vs A Receber
-    if ($vlr_pago < $vlr_orig) {
-        $saldo = $vlr_orig - $vlr_pago;
-        
-        if ($venc < $hoje) {
-            $total_atrasado += $saldo;
-        } else {
-            $total_a_receber += $saldo;
+if ($agrupar) {
+    // LÓGICA DE AGRUPAMENTO
+    $grupos = [];
+    foreach ($dados_brutos as $d) {
+        // Cálculos Globais (não muda)
+        $vlr_orig = $d['valor_parcela'];
+        $vlr_pago = $d['valor_pago'];
+        $venc = $d['data_vencimento'];
+        $total_recebido += $vlr_pago;
+        if ($vlr_pago < $vlr_orig) {
+            $saldo = $vlr_orig - $vlr_pago;
+            if ($venc < $hoje) $total_atrasado += $saldo;
+            else $total_a_receber += $saldo;
         }
+
+        // Montagem do Grupo
+        $id_cli = $d['venda_id']; // Usa ID da venda para agrupar
+        if (!isset($grupos[$id_cli])) {
+            $grupos[$id_cli] = [
+                'cliente' => $d['nome_cliente'],
+                'responsavel' => $d['responsavel'],
+                'empresa' => $d['nome_empresa'],
+                'qtd_parc' => 0,
+                'total_orig' => 0,
+                'total_pago' => 0,
+                'ultima_data' => $d['data_vencimento']
+            ];
+        }
+        $grupos[$id_cli]['qtd_parc']++;
+        $grupos[$id_cli]['total_orig'] += $d['valor_parcela'];
+        $grupos[$id_cli]['total_pago'] += $d['valor_pago'];
+        // Pega a maior data
+        if ($d['data_vencimento'] > $grupos[$id_cli]['ultima_data']) {
+            $grupos[$id_cli]['ultima_data'] = $d['data_vencimento'];
+        }
+    }
+    $dados_tabela = $grupos;
+
+} else {
+    // LÓGICA DETALHADA (NORMAL)
+    foreach ($dados_brutos as $d) {
+        // Cálculos Globais
+        $vlr_orig = $d['valor_parcela'];
+        $vlr_pago = $d['valor_pago'];
+        $venc = $d['data_vencimento'];
+        $total_recebido += $vlr_pago;
+        if ($vlr_pago < $vlr_orig) {
+            $saldo = $vlr_orig - $vlr_pago;
+            if ($venc < $hoje) $total_atrasado += $saldo;
+            else $total_a_receber += $saldo;
+        }
+        $dados_tabela[] = $d;
     }
 }
 
@@ -91,98 +133,118 @@ $lista_empresas = $pdo->query("SELECT DISTINCT nome_empresa FROM vendas_imob ORD
 <link rel="stylesheet" href="https://cdn.datatables.net/buttons/2.3.6/css/buttons.bootstrap5.min.css">
 
 <style>
-    .kpi-card { border-left: 5px solid #ccc; transition: transform 0.2s; }
-    .kpi-card:hover { transform: translateY(-3px); }
-    .kpi-icon { font-size: 2rem; opacity: 0.3; position: absolute; right: 15px; top: 15px; }
+    /* CORES DA CONSTRUTORA (PRETO, CINZA, AZUL MARINHO) */
+    :root {
+        --cor-primaria: #0d1b2a; /* Azul Quase Preto */
+        --cor-secundaria: #415a77; /* Azul Acinzentado */
+        --cor-fundo: #e0e1dd;
+    }
+
+    .kpi-card { 
+        border-left: 5px solid #ccc; 
+        transition: transform 0.2s; 
+        background-color: white;
+    }
+    .kpi-card:hover { transform: translateY(-3px); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
+    .kpi-icon { font-size: 2rem; opacity: 0.2; position: absolute; right: 15px; top: 15px; }
     
-    .janela-rolagem { width: 98%; height: 75vh; overflow: auto; background: #f4f4f4; border: 1px solid #ccc; margin: 0 auto; }
-    .mesa-gigante { width: 100%; min-width: 1400px; background-color: white; }
+    .janela-rolagem { width: 99%; height: 75vh; overflow: auto; background: white; border: 1px solid #ccc; margin: 0 auto; box-shadow: inset 0 0 10px #f0f0f0; }
+    .mesa-gigante { width: 100%; min-width: 1200px; }
     
-    /* Status Visual */
-    .st-pago { color: #198754; font-weight: bold; background-color: #d1e7dd; }
-    .st-atrasado { color: #dc3545; font-weight: bold; background-color: #f8d7da; }
-    .st-aberto { color: #0d6efd; font-weight: bold; background-color: #cfe2ff; }
-    .st-parcial { color: #fd7e14; font-weight: bold; background-color: #ffe5d0; }
+    /* Cabeçalho da Tabela - Estilo Construtora */
+    .thead-corp { background-color: var(--cor-primaria) !important; color: white !important; }
+    .thead-corp th { border-color: #333 !important; font-weight: 600; text-transform: uppercase; font-size: 0.85rem; }
+
+    /* Botões */
+    .btn-corp { background-color: var(--cor-primaria); color: white; border: none; }
+    .btn-corp:hover { background-color: #000; color: white; }
+
+    /* Status Visual (Mantido mas suavizado) */
+    .st-pago { color: #155724; background-color: #d4edda; font-weight: bold; border: 1px solid #c3e6cb; }
+    .st-atrasado { color: #721c24; background-color: #f8d7da; font-weight: bold; border: 1px solid #f5c6cb; }
+    .st-aberto { color: #004085; background-color: #cce5ff; font-weight: bold; border: 1px solid #b8daff; }
+    .st-parcial { color: #856404; background-color: #fff3cd; font-weight: bold; border: 1px solid #ffeeba; }
 </style>
 
-<div class="container-fluid p-3">
+<div class="container-fluid p-4" style="background-color: #f4f6f9;">
 
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
-            <h3 class="fw-bold text-dark m-0"><i class="bi bi-graph-up-arrow text-primary"></i> RELATÓRIO MESTRE IMOBILIÁRIO</h3>
-            <small class="text-muted">Visão completa de recebíveis, inadimplência e fluxo de caixa.</small>
+            <h3 class="fw-bold m-0" style="color: var(--cor-primaria);"><i class="bi bi-building"></i> RELATÓRIO FINANCEIRO MASTER</h3>
+            <small class="text-secondary">Visão consolidada de recebíveis e fluxo de caixa.</small>
         </div>
         <div>
-            <a href="index.php?page=clientes" class="btn btn-outline-dark fw-bold"><i class="bi bi-arrow-left"></i> Voltar</a>
+            <a href="index.php?page=clientes" class="btn btn-outline-dark fw-bold shadow-sm"><i class="bi bi-arrow-left"></i> Voltar</a>
         </div>
     </div>
 
     <div class="row mb-4 g-3">
         <div class="col-md-3">
-            <div class="card shadow-sm kpi-card" style="border-color: #198754;">
+            <div class="card shadow-sm kpi-card" style="border-left-color: #198754;">
                 <div class="card-body">
-                    <i class="bi bi-cash-stack kpi-icon text-success"></i>
-                    <small class="text-uppercase fw-bold text-success">Total Recebido</small>
+                    <i class="bi bi-check-circle-fill kpi-icon text-success"></i>
+                    <small class="text-uppercase fw-bold text-success" style="font-size: 0.75rem; letter-spacing: 1px;">Total Recebido</small>
                     <h3 class="mb-0 fw-bold text-dark">R$ <?php echo number_format($total_recebido, 2, ',', '.'); ?></h3>
-                    <small class="text-muted"><?php echo number_format($perc_recebido, 1); ?>% do total filtrado</small>
+                    <small class="text-muted"><?php echo number_format($perc_recebido, 1); ?>% do total</small>
                 </div>
             </div>
         </div>
         <div class="col-md-3">
-            <div class="card shadow-sm kpi-card" style="border-color: #0d6efd;">
+            <div class="card shadow-sm kpi-card" style="border-left-color: #0d6efd;">
                 <div class="card-body">
-                    <i class="bi bi-calendar-check kpi-icon text-primary"></i>
-                    <small class="text-uppercase fw-bold text-primary">A Receber (No Prazo)</small>
+                    <i class="bi bi-hourglass-split kpi-icon text-primary"></i>
+                    <small class="text-uppercase fw-bold text-primary" style="font-size: 0.75rem; letter-spacing: 1px;">A Receber (No Prazo)</small>
                     <h3 class="mb-0 fw-bold text-dark">R$ <?php echo number_format($total_a_receber, 2, ',', '.'); ?></h3>
-                    <small class="text-muted">Fluxo futuro previsto</small>
+                    <small class="text-muted">Fluxo futuro</small>
                 </div>
             </div>
         </div>
         <div class="col-md-3">
-            <div class="card shadow-sm kpi-card" style="border-color: #dc3545;">
+            <div class="card shadow-sm kpi-card" style="border-left-color: #dc3545;">
                 <div class="card-body">
-                    <i class="bi bi-exclamation-triangle-fill kpi-icon text-danger"></i>
-                    <small class="text-uppercase fw-bold text-danger">Inadimplência (Atrasados)</small>
+                    <i class="bi bi-exclamation-octagon-fill kpi-icon text-danger"></i>
+                    <small class="text-uppercase fw-bold text-danger" style="font-size: 0.75rem; letter-spacing: 1px;">Inadimplência</small>
                     <h3 class="mb-0 fw-bold text-dark">R$ <?php echo number_format($total_atrasado, 2, ',', '.'); ?></h3>
-                    <small class="text-danger fw-bold">Atenção requerida</small>
+                    <small class="text-danger fw-bold">Atenção Necessária</small>
                 </div>
             </div>
         </div>
         <div class="col-md-3">
-            <div class="card shadow-sm kpi-card" style="border-color: #666;">
+            <div class="card shadow-sm kpi-card" style="border-left-color: #333;">
                 <div class="card-body">
-                    <i class="bi bi-bank kpi-icon text-secondary"></i>
-                    <small class="text-uppercase fw-bold text-secondary">Total Geral (Filtrado)</small>
+                    <i class="bi bi-wallet2 kpi-icon text-secondary"></i>
+                    <small class="text-uppercase fw-bold text-secondary" style="font-size: 0.75rem; letter-spacing: 1px;">Total Geral</small>
                     <h3 class="mb-0 fw-bold text-dark">R$ <?php echo number_format($total_geral, 2, ',', '.'); ?></h3>
-                    <small class="text-muted">Volume total movimentado</small>
+                    <small class="text-muted">Volume filtrado</small>
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="card shadow-sm mb-3 border-0 bg-light">
-        <div class="card-body py-3">
+    <div class="card shadow-sm mb-3 border-0">
+        <div class="card-body py-3" style="background-color: #e9ecef; border-bottom: 2px solid #ccc;">
             <form method="GET" class="row g-2 align-items-end">
                 <input type="hidden" name="page" value="relatorio_master_imob">
                 
                 <div class="col-md-2">
-                    <label class="small fw-bold">Filtrar Data Por:</label>
-                    <select name="dt_tipo" class="form-select form-select-sm">
+                    <label class="small fw-bold text-secondary">Filtrar Data Por:</label>
+                    <select name="dt_tipo" class="form-select form-select-sm fw-bold">
                         <option value="vencimento" <?php echo ($dt_tipo=='vencimento')?'selected':''; ?>>📅 Vencimento</option>
                         <option value="pagamento" <?php echo ($dt_tipo=='pagamento')?'selected':''; ?>>💰 Pagamento (Baixa)</option>
+                        <option value="todos" <?php echo ($dt_tipo=='todos')?'selected':''; ?>>♾️ Todos (Venc ou Pag)</option>
                     </select>
                 </div>
                 <div class="col-md-2">
-                    <label class="small fw-bold">Início</label>
+                    <label class="small fw-bold text-secondary">Início</label>
                     <input type="date" name="dt_ini" class="form-control form-control-sm" value="<?php echo $dt_ini; ?>">
                 </div>
                 <div class="col-md-2">
-                    <label class="small fw-bold">Fim</label>
+                    <label class="small fw-bold text-secondary">Fim</label>
                     <input type="date" name="dt_fim" class="form-control form-control-sm" value="<?php echo $dt_fim; ?>">
                 </div>
                 
-                <div class="col-md-3">
-                    <label class="small fw-bold">Empreendimento / Empresa</label>
+                <div class="col-md-2">
+                    <label class="small fw-bold text-secondary">Empreendimento</label>
                     <select name="filtro_empresa" class="form-select form-select-sm">
                         <option value="">-- Todos --</option>
                         <?php foreach($lista_empresas as $e): ?>
@@ -194,17 +256,16 @@ $lista_empresas = $pdo->query("SELECT DISTINCT nome_empresa FROM vendas_imob ORD
                 </div>
 
                 <div class="col-md-2">
-                    <label class="small fw-bold">Status</label>
-                    <select name="filtro_status" class="form-select form-select-sm">
-                        <option value="">-- Todos --</option>
-                        <option value="atrasado" <?php echo ($filtro_status=='atrasado')?'selected':''; ?>>🔴 Atrasados</option>
-                        <option value="pago" <?php echo ($filtro_status=='pago')?'selected':''; ?>>🟢 Pagos</option>
-                        <option value="aberto" <?php echo ($filtro_status=='aberto')?'selected':''; ?>>🔵 A Vencer</option>
-                    </select>
+                    <div class="form-check mb-1">
+                        <input class="form-check-input" type="checkbox" name="agrupar" value="sim" id="checkAgrupar" <?php echo $agrupar?'checked':''; ?>>
+                        <label class="form-check-label small fw-bold text-dark" for="checkAgrupar">
+                            <i class="bi bi-people-fill"></i> Agrupar por Cliente
+                        </label>
+                    </div>
                 </div>
 
-                <div class="col-md-1">
-                    <button class="btn btn-primary btn-sm w-100 fw-bold"><i class="bi bi-funnel"></i></button>
+                <div class="col-md-2">
+                    <button class="btn btn-corp btn-sm w-100 fw-bold shadow-sm"><i class="bi bi-filter"></i> FILTRAR</button>
                 </div>
             </form>
         </div>
@@ -213,60 +274,83 @@ $lista_empresas = $pdo->query("SELECT DISTINCT nome_empresa FROM vendas_imob ORD
     <div class="card shadow border-0">
         <div class="card-body p-0">
             <div class="janela-rolagem">
-                <table id="tabelaMaster" class="table table-striped table-hover table-bordered mb-0 mesa-gigante">
-                    <thead class="table-dark text-center sticky-top">
+                <table id="tabelaMaster" class="table table-hover table-bordered mb-0 mesa-gigante">
+                    <thead class="thead-corp text-center sticky-top">
                         <tr>
-                            <th>STATUS</th>
-                            <th>VENCIMENTO</th>
-                            <th>CLIENTE</th>
-                            <th>EMPREENDIMENTO</th>
-                            <th>PARCELA</th>
-                            <th>VALOR ORIGINAL</th>
-                            <th>VALOR PAGO</th>
-                            <th>SALDO</th>
-                            <th>DT PAGTO</th>
-                            <th>CÓDIGO</th>
+                            <?php if($agrupar): ?>
+                                <th>CLIENTE</th>
+                                <th>RESPONSÁVEL</th>
+                                <th>EMPREENDIMENTO</th>
+                                <th>QTD PARC.</th>
+                                <th>ÚLT. DATA</th>
+                                <th>TOTAL ORIGINAL</th>
+                                <th>TOTAL PAGO</th>
+                                <th>SALDO DEVEDOR</th>
+                            <?php else: ?>
+                                <th>STATUS</th>
+                                <th>VENCIMENTO</th>
+                                <th>CLIENTE</th>
+                                <th>RESPONSÁVEL</th>
+                                <th>EMPREENDIMENTO</th>
+                                <th>PARCELA</th>
+                                <th>VALOR</th>
+                                <th>PAGO</th>
+                                <th>SALDO</th>
+                                <th>DT PAGTO</th>
+                            <?php endif; ?>
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach($dados as $row): 
-                            // Lógica de Status Visual
-                            $classe = ""; $status_txt = "";
-                            $saldo = $row['valor_parcela'] - $row['valor_pago'];
-                            
-                            // Define Status
-                            if ($row['valor_pago'] >= ($row['valor_parcela'] - 0.1)) {
-                                $classe = "st-pago"; $status_txt = "PAGO";
-                            } elseif ($row['valor_pago'] > 0) {
-                                $classe = "st-parcial"; $status_txt = "PARCIAL";
-                            } elseif ($row['data_vencimento'] < $hoje) {
-                                $classe = "st-atrasado"; $status_txt = "ATRASADO";
-                            } else {
-                                $classe = "st-aberto"; $status_txt = "A VENCER";
-                            }
-
-                            // Aplica filtro de status PHP (se selecionado)
-                            if (!empty($filtro_status)) {
-                                if ($filtro_status == 'atrasado' && $status_txt != 'ATRASADO') continue;
-                                if ($filtro_status == 'pago' && $status_txt != 'PAGO') continue;
-                                if ($filtro_status == 'aberto' && $status_txt != 'A VENCER') continue;
-                            }
+                        <?php 
+                        if ($agrupar) {
+                            // --- EXIBIÇÃO AGRUPADA ---
+                            foreach($dados_tabela as $row):
+                                $saldo_grupo = $row['total_orig'] - $row['total_pago'];
                         ?>
-                        <tr>
-                            <td class="text-center small"><span class="badge <?php echo $classe; ?> w-100"><?php echo $status_txt; ?></span></td>
-                            <td class="text-center fw-bold"><?php echo date('d/m/Y', strtotime($row['data_vencimento'])); ?></td>
-                            <td><?php echo mb_strimwidth($row['nome_cliente'], 0, 30, "..."); ?></td>
-                            <td><?php echo mb_strimwidth($row['nome_empresa'], 0, 30, "..."); ?></td>
-                            <td class="text-center"><?php echo $row['numero_parcela']; ?></td>
-                            
-                            <td class="text-end fw-bold text-secondary">R$ <?php echo number_format($row['valor_parcela'], 2, ',', '.'); ?></td>
-                            <td class="text-end fw-bold text-success">R$ <?php echo number_format($row['valor_pago'], 2, ',', '.'); ?></td>
-                            <td class="text-end fw-bold text-danger">R$ <?php echo number_format($saldo > 0 ? $saldo : 0, 2, ',', '.'); ?></td>
-                            
-                            <td class="text-center small text-muted"><?php echo $row['data_pagamento'] ? date('d/m/Y', strtotime($row['data_pagamento'])) : '-'; ?></td>
-                            <td class="text-center small"><?php echo $row['codigo_compra']; ?></td>
-                        </tr>
-                        <?php endforeach; ?>
+                            <tr>
+                                <td class="fw-bold"><?php echo mb_strimwidth($row['cliente'], 0, 40, "..."); ?></td>
+                                <td class="text-center small text-muted"><?php echo $row['responsavel'] ?: '-'; ?></td>
+                                <td><?php echo $row['empresa']; ?></td>
+                                <td class="text-center"><span class="badge bg-secondary"><?php echo $row['qtd_parc']; ?></span></td>
+                                <td class="text-center"><?php echo date('d/m/Y', strtotime($row['ultima_data'])); ?></td>
+                                <td class="text-end text-secondary">R$ <?php echo number_format($row['total_orig'], 2, ',', '.'); ?></td>
+                                <td class="text-end text-success fw-bold">R$ <?php echo number_format($row['total_pago'], 2, ',', '.'); ?></td>
+                                <td class="text-end text-danger fw-bold">R$ <?php echo number_format($saldo_grupo, 2, ',', '.'); ?></td>
+                            </tr>
+                        <?php 
+                            endforeach;
+                        } else {
+                            // --- EXIBIÇÃO DETALHADA (PADRÃO) ---
+                            foreach($dados_tabela as $row): 
+                                $saldo = $row['valor_parcela'] - $row['valor_pago'];
+                                
+                                // Define Status
+                                if ($row['valor_pago'] >= ($row['valor_parcela'] - 0.1)) {
+                                    $classe = "st-pago"; $status_txt = "PAGO";
+                                } elseif ($row['valor_pago'] > 0) {
+                                    $classe = "st-parcial"; $status_txt = "PARCIAL";
+                                } elseif ($row['data_vencimento'] < $hoje) {
+                                    $classe = "st-atrasado"; $status_txt = "ATRASADO";
+                                } else {
+                                    $classe = "st-aberto"; $status_txt = "A VENCER";
+                                }
+                        ?>
+                            <tr>
+                                <td class="text-center small"><span class="badge <?php echo $classe; ?> w-100 p-1"><?php echo $status_txt; ?></span></td>
+                                <td class="text-center fw-bold"><?php echo date('d/m/Y', strtotime($row['data_vencimento'])); ?></td>
+                                <td><?php echo mb_strimwidth($row['nome_cliente'], 0, 25, "..."); ?></td>
+                                <td class="small text-muted text-center"><?php echo mb_strimwidth($row['responsavel'], 0, 15, "..."); ?></td>
+                                <td><?php echo mb_strimwidth($row['nome_empresa'], 0, 20, "..."); ?></td>
+                                <td class="text-center"><?php echo $row['numero_parcela']; ?></td>
+                                <td class="text-end text-secondary">R$ <?php echo number_format($row['valor_parcela'], 2, ',', '.'); ?></td>
+                                <td class="text-end text-success fw-bold">R$ <?php echo number_format($row['valor_pago'], 2, ',', '.'); ?></td>
+                                <td class="text-end text-danger fw-bold">R$ <?php echo number_format($saldo > 0 ? $saldo : 0, 2, ',', '.'); ?></td>
+                                <td class="text-center small text-muted"><?php echo $row['data_pagamento'] ? date('d/m/Y', strtotime($row['data_pagamento'])) : '-'; ?></td>
+                            </tr>
+                        <?php 
+                            endforeach; 
+                        } 
+                        ?>
                     </tbody>
                 </table>
             </div>
@@ -289,28 +373,28 @@ $lista_empresas = $pdo->query("SELECT DISTINCT nome_empresa FROM vendas_imob ORD
 $(document).ready(function() {
     $('#tabelaMaster').DataTable({
         paging: true,
-        pageLength: 100, // Mostra bastante linha
-        ordering: false, // Deixa a ordem do SQL (Data)
+        pageLength: 100, 
+        ordering: false, 
         dom: 'Bfrtip',
         buttons: [
             { 
                 extend: 'excel', 
                 text: '<i class="bi bi-file-earmark-excel"></i> Excel', 
-                className: 'btn btn-success btn-sm me-1',
-                title: 'Relatório Financeiro Imobiliário'
+                className: 'btn btn-success btn-sm me-1 fw-bold',
+                title: 'Relatório Master Imobiliário'
             },
             { 
                 extend: 'pdfHtml5', 
                 text: '<i class="bi bi-file-earmark-pdf"></i> PDF', 
-                className: 'btn btn-danger btn-sm me-1',
+                className: 'btn btn-danger btn-sm me-1 fw-bold',
                 orientation: 'landscape',
                 pageSize: 'A4',
-                title: 'Relatório Financeiro Imobiliário'
+                title: 'Relatório Master Imobiliário'
             },
             { 
                 extend: 'print', 
                 text: '<i class="bi bi-printer"></i> Imprimir', 
-                className: 'btn btn-secondary btn-sm'
+                className: 'btn btn-secondary btn-sm fw-bold'
             }
         ],
         language: { url: "//cdn.datatables.net/plug-ins/1.13.4/i18n/pt-BR.json" }

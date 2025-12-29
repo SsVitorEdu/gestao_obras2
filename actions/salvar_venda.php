@@ -1,5 +1,6 @@
 <?php
 // actions/salvar_venda.php
+// CORRIGIDO: Agora inclui o campo 'responsavel' no banco de dados
 include '../conexao.php'; 
 
 function converterMoeda($valor) {
@@ -13,6 +14,11 @@ $cliente_id   = $_POST['cliente_id'];
 $codigo       = $_POST['codigo_compra'];
 $nome_casa    = $_POST['nome_casa'];
 $nome_empresa = $_POST['nome_empresa'];
+
+// --- CORREÇÃO AQUI ---
+// Estamos pegando o campo que vem do formulário e transformando em maiúsculo
+$responsavel  = mb_strtoupper($_POST['responsavel'] ?? ''); 
+
 $valor_total  = converterMoeda($_POST['valor_total']);
 
 // Datas (se vier vazio, salva NULL)
@@ -22,20 +28,22 @@ $dt_fim      = !empty($_POST['data_fim']) ? $_POST['data_fim'] : NULL;
 
 try {
     if (!empty($id)) {
-        // EDITAR
+        // EDITAR - Adicionei 'responsavel = ?'
         $sql = "UPDATE vendas_imob SET 
-                codigo_compra = ?, nome_casa = ?, nome_empresa = ?, 
+                codigo_compra = ?, nome_casa = ?, nome_empresa = ?, responsavel = ?, 
                 data_contrato = ?, data_inicio = ?, data_fim = ?, valor_total = ? 
                 WHERE id = ?";
         $stmt = $pdo->prepare($sql);
-        $stmt->execute([$codigo, $nome_casa, $nome_empresa, $dt_contrato, $dt_inicio, $dt_fim, $valor_total, $id]);
+        // Adicionei a variável $responsavel na ordem correta
+        $stmt->execute([$codigo, $nome_casa, $nome_empresa, $responsavel, $dt_contrato, $dt_inicio, $dt_fim, $valor_total, $id]);
     } else {
-        // INSERIR
+        // INSERIR - Adicionei a coluna e o ? extra
         $sql = "INSERT INTO vendas_imob 
-                (cliente_id, codigo_compra, nome_casa, nome_empresa, data_contrato, data_inicio, data_fim, valor_total) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+                (cliente_id, codigo_compra, nome_casa, nome_empresa, responsavel, data_contrato, data_inicio, data_fim, valor_total) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
         $stmt = $pdo->prepare($sql);
-        $stmt->execute([$cliente_id, $codigo, $nome_casa, $nome_empresa, $dt_contrato, $dt_inicio, $dt_fim, $valor_total]);
+        // Adicionei a variável $responsavel
+        $stmt->execute([$cliente_id, $codigo, $nome_casa, $nome_empresa, $responsavel, $dt_contrato, $dt_inicio, $dt_fim, $valor_total]);
     }
 
     header("Location: ../index.php?page=detalhe_cliente&id=$cliente_id&msg=venda_salva");
